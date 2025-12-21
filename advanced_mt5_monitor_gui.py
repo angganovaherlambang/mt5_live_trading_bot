@@ -501,6 +501,7 @@ class AdvancedMT5TradingMonitorGUI:
         self.terminal_text.tag_config("SIGNAL", foreground="cyan")
         self.terminal_text.tag_config("ERROR", foreground="red")
         self.terminal_text.tag_config("SUCCESS", foreground="lime")
+        self.terminal_text.tag_config("INFO", foreground="lightblue")
         
         # Terminal controls
         terminal_controls = ttk.Frame(terminal_frame)
