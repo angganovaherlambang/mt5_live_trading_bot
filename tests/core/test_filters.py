@@ -67,6 +67,11 @@ class TestCandleDirection:
         assert validate_candle_direction(prev_open=1.09, prev_close=1.10, config=cfg, direction="LONG") is True
         assert validate_candle_direction(prev_open=1.10, prev_close=1.09, config=cfg, direction="LONG") is False
 
+    def test_requires_bearish_candle_for_short_when_enabled(self, eurusd_config):
+        cfg = {**eurusd_config, "SHORT_USE_CANDLE_DIRECTION_FILTER": True}
+        assert validate_candle_direction(prev_open=1.10, prev_close=1.09, config=cfg, direction="SHORT") is True
+        assert validate_candle_direction(prev_open=1.09, prev_close=1.10, config=cfg, direction="SHORT") is False
+
 
 class TestEmaOrdering:
     def test_passes_correct_long_stack(self, eurusd_config):
@@ -89,6 +94,21 @@ class TestEmaOrdering:
             ema_confirm=1.103, ema_fast=1.104, ema_slow=1.105,
             config=cfg, direction="LONG"
         ) is True
+
+    def test_passes_correct_short_stack(self, eurusd_config):
+        cfg = {**eurusd_config, "SHORT_USE_EMA_ORDER_CONDITION": True}
+        # SHORT: confirm < fast < slow (bearish stack)
+        assert validate_ema_ordering(
+            ema_confirm=1.103, ema_fast=1.104, ema_slow=1.105,
+            config=cfg, direction="SHORT"
+        ) is True
+
+    def test_fails_wrong_short_stack(self, eurusd_config):
+        cfg = {**eurusd_config, "SHORT_USE_EMA_ORDER_CONDITION": True}
+        assert validate_ema_ordering(
+            ema_confirm=1.105, ema_fast=1.104, ema_slow=1.103,
+            config=cfg, direction="SHORT"
+        ) is False
 
 
 class TestTimeFilter:

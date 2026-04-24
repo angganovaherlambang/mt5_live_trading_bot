@@ -7,7 +7,6 @@ No MT5, GUI, or I/O dependency.
 `direction` parameter is "LONG" or "SHORT" throughout.
 """
 from __future__ import annotations
-import math
 from datetime import datetime
 
 
