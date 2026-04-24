@@ -6,7 +6,6 @@ No MT5 or GUI dependency.
 """
 from __future__ import annotations
 import re
-import importlib.util
 import logging
 from pathlib import Path
 from typing import Optional
@@ -32,7 +31,7 @@ _REQUIRED_SHORT_PARAMS = [
 
 def extract_numeric_value(line: str) -> Optional[float]:
     """Parse 'key = <number>' from a single config file line. Returns None if not numeric."""
-    match = re.search(r"=\s*(-?\d+\.?\d*(?:e[+-]?\d+)?)\s*$", line, re.IGNORECASE)
+    match = re.search(r"=\s*(-?\d+\.?\d*(?:e[+-]?\d+)?)[,]?\s*$", line, re.IGNORECASE)
     if match:
         return float(match.group(1))
     return None
@@ -40,7 +39,7 @@ def extract_numeric_value(line: str) -> Optional[float]:
 
 def extract_bool_value(line: str) -> Optional[bool]:
     """Parse 'key = True/False' from a single config file line. Returns None if not boolean."""
-    match = re.search(r"=\s*(True|False)\s*$", line)
+    match = re.search(r"=\s*(True|False)[,]?\s*$", line)
     if match:
         return match.group(1) == "True"
     return None
@@ -65,25 +64,30 @@ def parse_strategy_config(strategy_path: Path) -> dict:
         stripped = line.strip()
         if stripped.startswith("#") or "=" not in stripped:
             continue
+
+        # Detect the key from the original stripped line (handles KEY=value and KEY = value)
         key_part, _, _ = stripped.partition("=")
         key = key_part.strip()
         if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", key):
             continue
 
-        bool_val = extract_bool_value(stripped)
+        # Strip trailing inline comment before value matching
+        code_part = re.sub(r"\s*#.*$", "", stripped).strip()
+
+        bool_val = extract_bool_value(code_part)
         if bool_val is not None:
             config[key] = bool_val
             continue
 
-        num_val = extract_numeric_value(stripped)
+        num_val = extract_numeric_value(code_part)
         if num_val is not None:
             config[key] = num_val
             continue
 
-        # String values
-        str_match = re.search(r"=\s*['\"](.+)['\"]\s*$", stripped)
+        # String values — require matching quote characters, allow trailing comma
+        str_match = re.search(r"""=\s*(?:'([^']*)'|"([^"]*)")\s*[,]?\s*$""", code_part)
         if str_match:
-            config[key] = str_match.group(1)
+            config[key] = str_match.group(1) or str_match.group(2)
 
     return config
 
