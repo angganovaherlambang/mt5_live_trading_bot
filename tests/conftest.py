@@ -11,13 +11,14 @@ def sample_ohlcv_df():
     close = 1.1000 + np.cumsum(np.random.randn(n) * 0.0002)
     high = close + np.random.uniform(0.0001, 0.0005, n)
     low = close - np.random.uniform(0.0001, 0.0005, n)
-    open_ = close - np.random.randn(n) * 0.0001
+    open_ = np.clip(close - np.random.randn(n) * 0.0001, low, high)
     return pd.DataFrame({
         "open": open_,
         "high": high,
         "low": low,
         "close": close,
         "tick_volume": np.random.randint(100, 1000, n),
+        "time": pd.date_range("2026-01-01", periods=n, freq="5min"),
     })
 
 
