@@ -3,6 +3,10 @@
 
 All functions take a PhaseState + market data and return a (possibly mutated) PhaseState.
 No MT5, GUI, or I/O dependency.
+
+CONTRACT: All transition functions mutate the PhaseState object in-place. The caller owns
+the object and must ensure no concurrent access. The monitor loop processes symbols
+sequentially — one symbol at a time — to satisfy this contract.
 """
 from __future__ import annotations
 import logging
@@ -30,8 +34,14 @@ def _all_entry_filters_pass(
     config: dict,
     direction: str,
     bar_index: int,
+    now_utc=None,
+    utc_offset: int = 0,
 ) -> bool:
     """Run the full filter cascade for one direction. Returns True only if all enabled filters pass."""
+    from datetime import datetime, timezone
+    if now_utc is None:
+        now_utc = datetime.now(tz=timezone.utc)
+
     atr = indicators["atr"]
     atr_prev = indicators["atr_prev"]
     ema_fast_val = indicators["ema_fast"].iloc[bar_index]
@@ -57,6 +67,7 @@ def _all_entry_filters_pass(
         validate_price_filter(price, ema_filter_val, config, direction),
         validate_candle_direction(prev_open, prev_close, config, direction),
         validate_ema_ordering(ema_confirm_val, ema_fast_val, ema_slow_val, config, direction),
+        validate_time_filter(now_utc, config, utc_offset),
     ]
     return all(checks)
 
@@ -210,6 +221,7 @@ def advance_state(
     """
     Top-level state machine tick. Call once per closed candle per symbol.
     Returns the (possibly updated) PhaseState.
+    Mutates state in place. Not thread-safe for concurrent calls on the same state object.
     """
     # Check global invalidation first
     crossover = detect_ema_crossover_at_index(df, indicators, bar_index)

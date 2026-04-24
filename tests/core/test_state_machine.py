@@ -27,11 +27,12 @@ def bullish_df():
 
 class TestTransitionScanning:
     def test_no_crossover_stays_scanning(self, bullish_df, eurusd_config):
-        """Flat trending data with no crossover should stay in SCANNING."""
+        """Smooth uptrend with no recent crossover — last bar should stay SCANNING."""
         state = PhaseState(symbol="EURUSD")
         indicators = calculate_indicators(bullish_df, eurusd_config)
+        # In a smooth uptrend, no crossover at bar -2
         new_state = transition_scanning(state, bullish_df, indicators, eurusd_config, bar_index=-2)
-        assert new_state.phase in (Phase.SCANNING, Phase.ARMED_LONG, Phase.ARMED_SHORT)
+        assert new_state.phase == Phase.SCANNING
 
     def test_armed_after_long_crossover(self, eurusd_config):
         """Construct a crossover: after transition, state must be ARMED_LONG."""
