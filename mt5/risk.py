@@ -65,3 +65,43 @@ def calculate_lot_size(
     lot = steps * lot_step
 
     return max(min_lot, min(lot, max_lot))
+
+
+def calculate_lot_size_from_point_value(
+    risk_amount: float,
+    sl_distance: float,
+    value_per_point: float,
+    point_size: float,
+    min_lot: float,
+    max_lot: float,
+    lot_step: float,
+) -> float:
+    """
+    Return the lot size that risks exactly `risk_amount`, using MT5 broker specs.
+
+    This is the correct formula for all instruments — handles forex, gold,
+    silver, indices, and other non-standard contract sizes.
+
+    Parameters
+    ----------
+    risk_amount    : account currency to risk (e.g. balance * 0.01 for 1%)
+    sl_distance    : SL distance in price units (abs(entry_price - sl_price))
+    value_per_point: account currency per 1-point move per 1 lot.
+                     Derive from MT5: trade_tick_value / trade_tick_size * point
+                     EURUSD example: $10 / 0.00001 × 0.00001 = $10/point/lot
+                     XAUUSD example: $1  / 0.01    × 0.01    = $1/point/lot
+    point_size     : size of 1 price point = symbol_info.point
+    min_lot        : broker minimum lot (e.g. 0.01)
+    max_lot        : hard cap (e.g. 0.5 for safety)
+    lot_step       : broker lot step (e.g. 0.01)
+    """
+    if risk_amount <= 0 or sl_distance <= 0 or value_per_point <= 0 or point_size <= 0:
+        return min_lot
+
+    sl_points = sl_distance / point_size
+    raw = risk_amount / (sl_points * value_per_point)
+
+    steps = math.floor(raw / lot_step)
+    lot = steps * lot_step
+
+    return max(min_lot, min(lot, max_lot))

@@ -1,5 +1,5 @@
 import pytest
-from mt5.risk import calculate_sl_tp, calculate_lot_size
+from mt5.risk import calculate_sl_tp, calculate_lot_size, calculate_lot_size_from_point_value
 
 
 class TestCalculateSlTp:
@@ -117,3 +117,75 @@ class TestCalculateLotSize:
             lot_step=0.01,
         )
         assert lot == 0.01
+
+
+class TestCalculateLotSizeFromPointValue:
+    def test_eurusd_standard_sizing(self):
+        # EURUSD: point=0.00001, tick_value=$10, tick_size=0.00001
+        # value_per_point = $10/0.00001×0.00001 = $10/point/lot
+        # SL = 30 pips = 0.00300 = 300 points
+        # risk $100 / (300 × $10) = 0.0333 → floor to 0.03
+        lot = calculate_lot_size_from_point_value(
+            risk_amount=100.0,
+            sl_distance=0.00300,
+            value_per_point=10.0,
+            point_size=0.00001,
+            min_lot=0.01,
+            max_lot=1.0,
+            lot_step=0.01,
+        )
+        assert lot == pytest.approx(0.03, abs=0.005)
+
+    def test_xauusd_sizing(self):
+        # XAUUSD: point=0.01, tick_value=$1, tick_size=0.01
+        # value_per_point = $1/0.01×0.01 = $1/point/lot
+        # SL = 28.62 price units = 2862 points
+        # risk $500 / (2862 × $1) = 0.1748 → floor to 0.17
+        lot = calculate_lot_size_from_point_value(
+            risk_amount=500.0,
+            sl_distance=28.62,
+            value_per_point=1.0,
+            point_size=0.01,
+            min_lot=0.01,
+            max_lot=10.0,
+            lot_step=0.01,
+        )
+        assert 0.17 <= lot <= 0.18
+
+    def test_respects_max_lot(self):
+        lot = calculate_lot_size_from_point_value(
+            risk_amount=100_000.0,
+            sl_distance=0.0001,
+            value_per_point=10.0,
+            point_size=0.00001,
+            min_lot=0.01,
+            max_lot=0.5,
+            lot_step=0.01,
+        )
+        assert lot <= 0.5
+
+    def test_respects_min_lot_on_tiny_risk(self):
+        lot = calculate_lot_size_from_point_value(
+            risk_amount=0.001,
+            sl_distance=10.0,
+            value_per_point=10.0,
+            point_size=0.00001,
+            min_lot=0.01,
+            max_lot=1.0,
+            lot_step=0.01,
+        )
+        assert lot >= 0.01
+
+    def test_returns_min_lot_on_invalid_inputs(self):
+        # risk_amount=0
+        assert calculate_lot_size_from_point_value(
+            0, 0.001, 10.0, 0.00001, 0.01, 1.0, 0.01
+        ) == 0.01
+        # sl_distance=0
+        assert calculate_lot_size_from_point_value(
+            100, 0.0, 10.0, 0.00001, 0.01, 1.0, 0.01
+        ) == 0.01
+        # value_per_point=0
+        assert calculate_lot_size_from_point_value(
+            100, 0.001, 0.0, 0.00001, 0.01, 1.0, 0.01
+        ) == 0.01
