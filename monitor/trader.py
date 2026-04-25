@@ -4,10 +4,12 @@ OrderExecutor: bridges AWAITING_ENTRY state → MT5 market order.
 Called by MonitorLoop after each advance_state() tick. When a symbol
 reaches Phase.AWAITING_ENTRY, this module:
   1. Checks no position already open for this symbol
-  2. Calculates lot size from ATR + account balance
-  3. Calculates SL/TP from ATR + config multipliers
-  4. Places a market order via mt5.orders
-  5. Resets the PhaseState to SCANNING (win or lose, find the next setup)
+  2. Fetches current bid/ask price as the expected entry price
+  3. Fetches broker contract specs (point, tick_value, contract_size, lot limits)
+  4. Calculates SL/TP absolute levels from entry price + ATR multipliers
+  5. Calculates lot size using the MT5-native value_per_point formula
+  6. Places a market order via mt5.orders (live) or logs intent (demo)
+  7. Resets the PhaseState to SCANNING — never leaves a symbol stuck in AWAITING_ENTRY
 
 Always resets state — never leaves a symbol stuck in AWAITING_ENTRY.
 """
@@ -15,18 +17,15 @@ from __future__ import annotations
 import logging
 
 from core.state import PhaseState, Phase
-from mt5.orders import place_market_order, get_open_positions
-from mt5.risk import calculate_sl_tp, calculate_lot_size
+from mt5.orders import (
+    place_market_order,
+    get_open_positions,
+    get_symbol_info,
+    get_current_price,
+)
+from mt5.risk import calculate_sl_tp, calculate_lot_size_from_point_value
 
 logger = logging.getLogger(__name__)
-
-# Pip size for lot-size calculation
-_PIP_SIZE_DEFAULT = 0.0001
-_PIP_SIZE_JPY = 0.01
-# Approximate pip value in USD for standard lot on major USD-quote pairs (e.g. EUR/USD).
-# For non-USD-quote pairs (e.g. USD/CHF, EUR/GBP), this will be inaccurate.
-# A production system should query mt5.symbol_info() for accurate contract specs.
-_PIP_VALUE_PER_LOT_USD = 10.0
 
 
 class OrderExecutor:
@@ -39,7 +38,7 @@ class OrderExecutor:
     configs    : {symbol: config_dict}
     risk_pct   : fraction of balance to risk per trade (e.g. 0.01 = 1%)
     max_lot    : hard cap on lot size (safety limit)
-    demo_mode  : if True, skips actual order_send (dry run)
+    demo_mode  : if True, logs what it would do but never calls place_market_order
     """
 
     def __init__(
@@ -81,13 +80,13 @@ class OrderExecutor:
             logger.warning("%s: invalid direction %r, skipping", symbol, direction)
             return
 
-        # Skip if position already open
+        # Skip if position already open for this symbol
         open_positions = get_open_positions(symbol)
         if open_positions:
             logger.info("%s: position already open, skipping new entry", symbol)
             return
 
-        # Get account balance for sizing
+        # Account balance for risk sizing
         account = self.connection.get_account_info()
         if account is None:
             logger.error("%s: cannot get account info, skipping order", symbol)
@@ -99,35 +98,70 @@ class OrderExecutor:
             logger.warning("%s: ATR=%.6f is invalid, skipping order", symbol, atr)
             return
 
+        # Broker contract specs — needed for accurate lot sizing
+        sym_info = get_symbol_info(symbol)
+        if sym_info is None:
+            logger.error("%s: cannot get symbol info, skipping order", symbol)
+            return
+
+        # Current bid/ask — used as expected entry price for SL/TP calculation
+        entry_price = get_current_price(symbol, direction)
+        if entry_price is None:
+            logger.error("%s: cannot get current price, skipping order", symbol)
+            return
+
         # SL/TP multipliers from strategy config
         sl_mult = float(config.get(f"{direction.lower()}_atr_sl_multiplier", 1.5))
         tp_mult = float(config.get(f"{direction.lower()}_atr_tp_multiplier", 10.0))
 
+        # Absolute SL/TP price levels (based on current ask/bid as entry estimate)
+        sl_price, tp_price = calculate_sl_tp(
+            direction=direction,
+            entry_price=entry_price,
+            atr=atr,
+            sl_multiplier=sl_mult,
+            tp_multiplier=tp_mult,
+        )
         sl_distance = atr * sl_mult
-        pip_size = _PIP_SIZE_JPY if symbol.endswith("JPY") else _PIP_SIZE_DEFAULT
-        sl_pips = sl_distance / pip_size
 
-        lot = calculate_lot_size(
+        # value_per_point: correct for all instruments (forex, gold, silver, etc.)
+        # Formula from MT5 docs: trade_tick_value / trade_tick_size * point
+        tick_value = sym_info["trade_tick_value"]
+        tick_size = sym_info["trade_tick_size"]
+        point = sym_info["point"]
+        value_per_point = (tick_value / tick_size * point) if tick_size > 0 else tick_value
+
+        lot = calculate_lot_size_from_point_value(
             risk_amount=balance * self.risk_pct,
-            sl_pips=sl_pips,
-            pip_value_per_lot=_PIP_VALUE_PER_LOT_USD,
-            min_lot=0.01,
-            max_lot=self.max_lot,
-            lot_step=0.01,
+            sl_distance=sl_distance,
+            value_per_point=value_per_point,
+            point_size=point,
+            min_lot=sym_info["volume_min"],
+            max_lot=min(self.max_lot, sym_info["volume_max"]),
+            lot_step=sym_info["volume_step"],
         )
 
         if self.demo_mode:
             logger.info(
-                "%s: DEMO — would place %s order: lot=%.2f sl_dist=%.5f sl_pips=%.1f",
-                symbol, direction, lot, sl_distance, sl_pips,
+                "%s: DEMO — would place %s order: entry=%.5f sl=%.5f tp=%.5f lot=%.2f",
+                symbol, direction, entry_price, sl_price, tp_price, lot,
             )
             return
 
-        # Live order placement — SL/TP require the actual fill price which is
-        # only known after MT5 executes the order. This is a known limitation:
-        # post-fill SL/TP modification is not yet implemented.
-        # Until fill-price feedback is added, live mode is not safe to use.
-        raise NotImplementedError(
-            f"{symbol}: live order SL/TP requires post-fill price. "
-            "Use demo_mode=True until fill-price feedback is implemented."
+        ticket = place_market_order(
+            symbol=symbol,
+            direction=direction,
+            lot=lot,
+            sl=sl_price,
+            tp=tp_price,
+            deviation=10,
+            comment=f"sunrise_{direction.lower()}",
         )
+
+        if ticket:
+            logger.info(
+                "%s: order placed ticket=%d direction=%s lot=%.2f sl=%.5f tp=%.5f",
+                symbol, ticket, direction, lot, sl_price, tp_price,
+            )
+        else:
+            logger.error("%s: order placement failed", symbol)
