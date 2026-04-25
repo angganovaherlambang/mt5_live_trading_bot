@@ -56,33 +56,54 @@ class TestMonitorLoop:
         loop._process_symbol("EURUSD")
         assert q.empty()
 
+    def test_executor_called_when_awaiting_entry(self, mock_connection, eurusd_config):
+        """When state reaches AWAITING_ENTRY, order_executor.execute() is called."""
+        symbols = ["EURUSD"]
+        configs = {"EURUSD": eurusd_config}
+        q = queue.Queue()
 
-def test_executor_called_when_awaiting_entry(mock_connection, eurusd_config):
-    """When state reaches AWAITING_ENTRY, order_executor.execute() is called."""
-    from core.state import PhaseState, Phase
-    from monitor.loop import MonitorLoop
-    import queue
+        mock_executor = MagicMock()
+        loop = MonitorLoop(
+            connection=mock_connection,
+            configs=configs,
+            symbols=symbols,
+            update_queue=q,
+            order_executor=mock_executor,
+        )
 
-    symbols = ["EURUSD"]
-    configs = {"EURUSD": eurusd_config}
-    q = queue.Queue()
+        # Force state to AWAITING_ENTRY
+        loop.states["EURUSD"] = PhaseState(
+            symbol="EURUSD", phase=Phase.AWAITING_ENTRY, direction="LONG"
+        )
 
-    mock_executor = MagicMock()
-    loop = MonitorLoop(
-        connection=mock_connection,
-        configs=configs,
-        symbols=symbols,
-        update_queue=q,
-        order_executor=mock_executor,
-    )
+        # Patch advance_state to preserve the AWAITING_ENTRY state (no transition)
+        with patch("monitor.loop.advance_state", side_effect=lambda s, *a, **k: s):
+            loop._process_symbol("EURUSD")
 
-    # Force state to AWAITING_ENTRY
-    loop.states["EURUSD"] = PhaseState(
-        symbol="EURUSD", phase=Phase.AWAITING_ENTRY, direction="LONG"
-    )
+        mock_executor.execute.assert_called_once()
+        call_args = mock_executor.execute.call_args
+        assert call_args[0][1].phase == Phase.AWAITING_ENTRY
 
-    # Patch advance_state to preserve the AWAITING_ENTRY state (no transition)
-    with patch("monitor.loop.advance_state", side_effect=lambda s, *a, **k: s):
-        loop._process_symbol("EURUSD")
+    def test_executor_called_but_skips_when_scanning(self, mock_connection, eurusd_config):
+        """Executor.execute() is called, but its internal guard skips order when phase is SCANNING."""
+        symbols = ["EURUSD"]
+        configs = {"EURUSD": eurusd_config}
+        q = queue.Queue()
+        mock_executor = MagicMock()
+        loop = MonitorLoop(
+            connection=mock_connection,
+            configs=configs,
+            symbols=symbols,
+            update_queue=q,
+            order_executor=mock_executor,
+        )
+        # State is SCANNING
+        loop.states["EURUSD"] = PhaseState(symbol="EURUSD", phase=Phase.SCANNING)
 
-    mock_executor.execute.assert_called_once()
+        with patch("monitor.loop.advance_state", side_effect=lambda s, *a, **k: s):
+            loop._process_symbol("EURUSD")
+
+        # Executor was still called — the guard is inside OrderExecutor.execute(), not MonitorLoop
+        mock_executor.execute.assert_called_once()
+        call_args = mock_executor.execute.call_args
+        assert call_args[0][1].phase == Phase.SCANNING

@@ -43,6 +43,7 @@ class MonitorLoop:
     symbols : list[str]
     update_queue : queue.Queue — GUI reads from this
     state_file : Path — where to persist PhaseState between restarts
+    order_executor : OrderExecutor, optional — if provided, called after advance_state(); resets state
     """
 
     def __init__(
@@ -118,7 +119,7 @@ class MonitorLoop:
         state = self.states[symbol]
         self.states[symbol] = advance_state(state, df, indicators, config, bar_index=-2)
 
-        # Execute order if state machine reached AWAITING_ENTRY
+        # execute() resets state to SCANNING on completion; update_queue reflects post-execution state
         if self.order_executor is not None:
             self.order_executor.execute(symbol, self.states[symbol], indicators)
 
