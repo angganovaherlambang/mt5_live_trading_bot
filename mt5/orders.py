@@ -172,3 +172,53 @@ def close_position(ticket: int, symbol: str, lot: float, direction: str) -> bool
 
     logger.info("Closed position %d for %s", ticket, symbol)
     return True
+
+
+def get_symbol_info(symbol: str) -> Optional[dict]:
+    """
+    Return broker contract specs needed for position sizing.
+
+    Returns None if MT5 unavailable or symbol not found.
+    Keys: point, digits, trade_tick_value, trade_tick_size,
+          trade_contract_size, volume_min, volume_max, volume_step.
+    """
+    if mt5 is None:
+        logger.error("MetaTrader5 not available")
+        return None
+
+    info = mt5.symbol_info(symbol)
+    if info is None:
+        logger.error("Cannot get symbol info for %s", symbol)
+        return None
+
+    return {
+        "point": info.point,
+        "digits": info.digits,
+        "trade_tick_value": info.trade_tick_value,
+        "trade_tick_size": info.trade_tick_size,
+        "trade_contract_size": info.trade_contract_size,
+        "volume_min": info.volume_min,
+        "volume_max": info.volume_max,
+        "volume_step": info.volume_step,
+    }
+
+
+def get_current_price(symbol: str, direction: str) -> Optional[float]:
+    """
+    Return the expected fill price for a new market order.
+
+    LONG  → ask (we buy at ask)
+    SHORT → bid (we sell at bid)
+
+    Returns None if MT5 unavailable or no tick available.
+    """
+    if mt5 is None:
+        logger.error("MetaTrader5 not available")
+        return None
+
+    tick = mt5.symbol_info_tick(symbol)
+    if tick is None:
+        logger.error("Cannot get tick for %s", symbol)
+        return None
+
+    return tick.ask if direction == "LONG" else tick.bid

@@ -1,7 +1,7 @@
 import pytest
 from unittest.mock import MagicMock
 
-from mt5.orders import place_market_order, get_open_positions, close_position
+from mt5.orders import place_market_order, get_open_positions, close_position, get_symbol_info, get_current_price
 
 
 @pytest.fixture
@@ -17,10 +17,16 @@ def mock_mt5(mocker):
     result.retcode = 10009  # TRADE_RETCODE_DONE
     result.order = 111222
     m.order_send.return_value = result
-    # Symbol info
+    # Symbol info — includes broker contract specs for position sizing
     sym_info = MagicMock()
     sym_info.point = 0.00001
     sym_info.digits = 5
+    sym_info.trade_tick_value = 10.0
+    sym_info.trade_tick_size = 0.00001
+    sym_info.trade_contract_size = 100000
+    sym_info.volume_min = 0.01
+    sym_info.volume_max = 100.0
+    sym_info.volume_step = 0.01
     m.symbol_info.return_value = sym_info
     # Tick
     tick = MagicMock()
@@ -107,3 +113,34 @@ class TestClosePosition:
         result = close_position(ticket=111, symbol="EURUSD", lot=0.01, direction="LONG")
         assert result is False
         mock_mt5.order_send.assert_not_called()
+
+
+class TestGetSymbolInfo:
+    def test_returns_dict_with_required_keys(self, mock_mt5):
+        result = get_symbol_info("EURUSD")
+        assert result is not None
+        for key in ("point", "digits", "trade_tick_value", "trade_tick_size",
+                    "trade_contract_size", "volume_min", "volume_max", "volume_step"):
+            assert key in result, f"missing key: {key}"
+
+    def test_values_match_mt5_symbol_info(self, mock_mt5):
+        result = get_symbol_info("EURUSD")
+        assert result["point"] == 0.00001
+        assert result["trade_tick_value"] == 10.0
+        assert result["volume_min"] == 0.01
+
+    def test_returns_none_when_symbol_not_found(self, mock_mt5):
+        mock_mt5.symbol_info.return_value = None
+        assert get_symbol_info("INVALID") is None
+
+
+class TestGetCurrentPrice:
+    def test_long_returns_ask(self, mock_mt5):
+        assert get_current_price("EURUSD", "LONG") == 1.10010
+
+    def test_short_returns_bid(self, mock_mt5):
+        assert get_current_price("EURUSD", "SHORT") == 1.10000
+
+    def test_returns_none_when_tick_unavailable(self, mock_mt5):
+        mock_mt5.symbol_info_tick.return_value = None
+        assert get_current_price("EURUSD", "LONG") is None
