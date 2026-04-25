@@ -80,6 +80,11 @@ class OrderExecutor:
             logger.warning("%s: invalid direction %r, skipping", symbol, direction)
             return
 
+        atr = indicators.get("atr", 0.0)
+        if atr <= 0:
+            logger.warning("%s: ATR=%.6f is invalid, skipping order", symbol, atr)
+            return
+
         # Skip if position already open for this symbol
         open_positions = get_open_positions(symbol)
         if open_positions:
@@ -93,10 +98,6 @@ class OrderExecutor:
             return
 
         balance = account["balance"]
-        atr = indicators.get("atr", 0.0)
-        if atr <= 0:
-            logger.warning("%s: ATR=%.6f is invalid, skipping order", symbol, atr)
-            return
 
         # Broker contract specs — needed for accurate lot sizing
         sym_info = get_symbol_info(symbol)
@@ -129,7 +130,10 @@ class OrderExecutor:
         tick_value = sym_info["trade_tick_value"]
         tick_size = sym_info["trade_tick_size"]
         point = sym_info["point"]
-        value_per_point = (tick_value / tick_size * point) if tick_size > 0 else tick_value
+        if tick_size <= 0:
+            logger.error("%s: broker returned invalid tick_size=%.8f, skipping order", symbol, tick_size)
+            return
+        value_per_point = tick_value / tick_size * point
 
         lot = calculate_lot_size_from_point_value(
             risk_amount=balance * self.risk_pct,

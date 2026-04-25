@@ -221,3 +221,55 @@ class TestOrderExecutor:
             executor.execute("EURUSD", state, indicators)
             mock_place.assert_not_called()
         assert state.phase == Phase.SCANNING
+
+    def test_live_mode_short_sltp_calculated_from_entry_price(
+        self, mock_connection, eurusd_config, sym_info_dict
+    ):
+        """SHORT order: SL above entry, TP below entry."""
+        # Add short multipliers to config since eurusd_config only has long ones
+        config = {**eurusd_config, "short_atr_sl_multiplier": 1.5, "short_atr_tp_multiplier": 10.0}
+        live_executor = OrderExecutor(
+            connection=mock_connection,
+            configs={"EURUSD": config},
+            risk_pct=0.01,
+            max_lot=0.5,
+            demo_mode=False,
+        )
+        state = PhaseState(
+            symbol="EURUSD", phase=Phase.AWAITING_ENTRY, direction="SHORT"
+        )
+        indicators = {"atr": 0.0003, "trend": "BEARISH"}
+        entry_price = 1.10000  # bid for SHORT
+        atr = 0.0003
+        sl_mult = 1.5
+        tp_mult = 10.0
+        expected_sl = entry_price + atr * sl_mult  # SL above entry for SHORT
+        expected_tp = entry_price - atr * tp_mult  # TP below entry for SHORT
+
+        with patch("monitor.trader.place_market_order", return_value=888) as mock_place, \
+             patch("monitor.trader.get_open_positions", return_value=[]), \
+             patch("monitor.trader.get_symbol_info", return_value=sym_info_dict), \
+             patch("monitor.trader.get_current_price", return_value=entry_price):
+            live_executor.execute("EURUSD", state, indicators)
+
+        call_kwargs = mock_place.call_args[1]
+        assert abs(call_kwargs["sl"] - expected_sl) < 1e-6, "SL must be above entry for SHORT"
+        assert abs(call_kwargs["tp"] - expected_tp) < 1e-6, "TP must be below entry for SHORT"
+
+    def test_skips_if_tick_size_invalid(self, executor, sym_info_dict):
+        """tick_size <= 0 in broker response must skip order, not produce wrong sizing."""
+        state = PhaseState(symbol="EURUSD", phase=Phase.AWAITING_ENTRY, direction="LONG")
+        indicators = {"atr": 0.0003, "trend": "BULLISH"}
+        bad_sym_info = {
+            "point": 0.00001, "digits": 5,
+            "trade_tick_value": 10.0, "trade_tick_size": 0.0,  # invalid
+            "trade_contract_size": 100000,
+            "volume_min": 0.01, "volume_max": 100.0, "volume_step": 0.01,
+        }
+        with patch("monitor.trader.place_market_order") as mock_place, \
+             patch("monitor.trader.get_open_positions", return_value=[]), \
+             patch("monitor.trader.get_symbol_info", return_value=bad_sym_info), \
+             patch("monitor.trader.get_current_price", return_value=1.10010):
+            executor.execute("EURUSD", state, indicators)
+            mock_place.assert_not_called()
+        assert state.phase == Phase.SCANNING
