@@ -97,8 +97,6 @@ def place_market_order(
         "volume": lot,
         "type": order_type,
         "price": round(price, digits),
-        "sl": round(sl, digits),
-        "tp": round(tp, digits),
         "deviation": deviation,
         "magic": 20260425,
         "comment": comment,
@@ -120,6 +118,13 @@ def place_market_order(
         "%s: order placed — ticket=%d direction=%s lot=%.2f sl=%.5f tp=%.5f",
         symbol, result.order, direction, lot, sl, tp,
     )
+
+    if not set_position_sltp(result.order, symbol, sl, tp):
+        logger.warning(
+            "%s: order placed (ticket=%d) but SL/TP set failed — position open without SL/TP",
+            symbol, result.order,
+        )
+
     return result.order
 
 
@@ -149,6 +154,42 @@ def get_open_positions(symbol: str) -> list[dict]:
         }
         for p in positions
     ]
+
+
+def set_position_sltp(ticket: int, symbol: str, sl: float, tp: float) -> bool:
+    """
+    Set stop-loss and take-profit on an already-open position.
+
+    Sends a TRADE_ACTION_SLTP request — does not re-open or modify the order,
+    only adjusts the stop levels on an existing position identified by ticket.
+
+    Returns True on success, False on failure.
+    """
+    if mt5 is None:
+        return False
+
+    sym_info = mt5.symbol_info(symbol)
+    if sym_info is None:
+        logger.error("Cannot get symbol info to set SL/TP for position %d", ticket)
+        return False
+    digits = sym_info.digits
+
+    request = {
+        "action": mt5.TRADE_ACTION_SLTP,
+        "symbol": symbol,
+        "position": ticket,
+        "sl": round(sl, digits),
+        "tp": round(tp, digits),
+    }
+
+    result = mt5.order_send(request)
+    if result is None or result.retcode != RETCODE_DONE:
+        retcode = result.retcode if result else "no result"
+        logger.error("Failed to set SL/TP for position %d: retcode %s", ticket, retcode)
+        return False
+
+    logger.info("SL/TP set for position %d: sl=%.5f tp=%.5f", ticket, sl, tp)
+    return True
 
 
 def close_position(ticket: int, symbol: str, lot: float, direction: str) -> bool:
