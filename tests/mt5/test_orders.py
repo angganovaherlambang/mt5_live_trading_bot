@@ -144,3 +144,13 @@ class TestGetCurrentPrice:
     def test_returns_none_when_tick_unavailable(self, mock_mt5):
         mock_mt5.symbol_info_tick.return_value = None
         assert get_current_price("EURUSD", "LONG") is None
+
+    def test_returns_none_on_invalid_direction(self, mock_mt5):
+        from mt5.orders import get_current_price
+        assert get_current_price("EURUSD", "INVALID") is None
+
+    def test_returns_none_when_mt5_unavailable(self, mocker):
+        from mt5 import orders as orders_module
+        mocker.patch.object(orders_module, "mt5", None)
+        from mt5.orders import get_current_price
+        assert get_current_price("EURUSD", "LONG") is None

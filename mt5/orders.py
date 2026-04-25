@@ -210,10 +210,14 @@ def get_current_price(symbol: str, direction: str) -> Optional[float]:
     LONG  → ask (we buy at ask)
     SHORT → bid (we sell at bid)
 
-    Returns None if MT5 unavailable or no tick available.
+    Returns None if MT5 unavailable, no tick available, or direction invalid.
     """
     if mt5 is None:
         logger.error("MetaTrader5 not available")
+        return None
+
+    if direction not in ("LONG", "SHORT"):
+        logger.error("%s: invalid direction %r", symbol, direction)
         return None
 
     tick = mt5.symbol_info_tick(symbol)
