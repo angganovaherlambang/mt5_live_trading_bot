@@ -17,6 +17,32 @@ logger = logging.getLogger(__name__)
 
 RETCODE_DONE = 10009  # MT5 success code
 
+# Bitmask values for sym_info.filling_mode (which filling types the broker supports)
+_SYMBOL_FILLING_FOK = 1  # bit 0: ORDER_FILLING_FOK supported
+_SYMBOL_FILLING_IOC = 2  # bit 1: ORDER_FILLING_IOC supported
+
+
+def _select_filling_type(filling_mode_bits: int) -> int:
+    """
+    Return the ORDER_FILLING_* constant best supported by this broker/symbol.
+
+    Parameters
+    ----------
+    filling_mode_bits : int
+        sym_info.filling_mode from MT5 — bitmask of supported types:
+        bit 0 (value 1) = FOK supported
+        bit 1 (value 2) = IOC supported
+
+    Priority: IOC > FOK > RETURN.
+    IOC allows partial cancellation and is widely supported.
+    RETURN is the fallback for brokers/instruments with no explicit declaration.
+    """
+    if filling_mode_bits & _SYMBOL_FILLING_IOC:
+        return mt5.ORDER_FILLING_IOC
+    if filling_mode_bits & _SYMBOL_FILLING_FOK:
+        return mt5.ORDER_FILLING_FOK
+    return mt5.ORDER_FILLING_RETURN
+
 
 def place_market_order(
     symbol: str,
@@ -52,6 +78,7 @@ def place_market_order(
         return None
 
     digits = sym_info.digits
+    filling_type = _select_filling_type(sym_info.filling_mode)
     tick = mt5.symbol_info_tick(symbol)
     if tick is None:
         logger.error("Cannot get tick for %s", symbol)
@@ -76,7 +103,7 @@ def place_market_order(
         "magic": 20260425,
         "comment": comment,
         "type_time": mt5.ORDER_TIME_GTC,
-        "type_filling": mt5.ORDER_FILLING_IOC,
+        "type_filling": filling_type,
     }
 
     result = mt5.order_send(request)
@@ -146,6 +173,7 @@ def close_position(ticket: int, symbol: str, lot: float, direction: str) -> bool
         logger.error("Cannot get symbol info to close position %d for %s", ticket, symbol)
         return False
     digits = sym_info.digits
+    filling_type = _select_filling_type(sym_info.filling_mode)
 
     close_type = mt5.ORDER_TYPE_SELL if direction == "LONG" else mt5.ORDER_TYPE_BUY
     price = tick.bid if direction == "LONG" else tick.ask
@@ -161,7 +189,7 @@ def close_position(ticket: int, symbol: str, lot: float, direction: str) -> bool
         "magic": 20260425,
         "comment": "sunrise_close",
         "type_time": mt5.ORDER_TIME_GTC,
-        "type_filling": mt5.ORDER_FILLING_IOC,
+        "type_filling": filling_type,
     }
 
     result = mt5.order_send(request)

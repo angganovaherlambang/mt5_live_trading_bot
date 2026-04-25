@@ -11,7 +11,10 @@ def mock_mt5(mocker):
     m.ORDER_TYPE_SELL = 1
     m.TRADE_ACTION_DEAL = 1
     m.ORDER_TIME_GTC = 1
-    m.ORDER_FILLING_IOC = 2
+    # Filling type constants (ORDER_FILLING_* used in order request)
+    m.ORDER_FILLING_FOK = 0
+    m.ORDER_FILLING_IOC = 1
+    m.ORDER_FILLING_RETURN = 2
     # Successful order result
     result = MagicMock()
     result.retcode = 10009  # TRADE_RETCODE_DONE
@@ -27,6 +30,7 @@ def mock_mt5(mocker):
     sym_info.volume_min = 0.01
     sym_info.volume_max = 100.0
     sym_info.volume_step = 0.01
+    sym_info.filling_mode = 2  # IOC bit set (bit 1 = 2 means IOC supported)
     m.symbol_info.return_value = sym_info
     # Tick
     tick = MagicMock()
@@ -154,3 +158,59 @@ class TestGetCurrentPrice:
         mocker.patch.object(orders_module, "mt5", None)
         from mt5.orders import get_current_price
         assert get_current_price("EURUSD", "LONG") is None
+
+
+class TestSelectFillingType:
+    """Tests for the private _select_filling_type() helper."""
+
+    def test_ioc_preferred_when_supported(self, mock_mt5):
+        """When both IOC and FOK are supported, prefer IOC."""
+        from mt5.orders import _select_filling_type
+        result = _select_filling_type(3)  # bits: IOC=1, FOK=1
+        assert result == mock_mt5.ORDER_FILLING_IOC
+
+    def test_ioc_used_when_only_ioc_supported(self, mock_mt5):
+        """IOC only (bit 1 set, bit 0 clear)."""
+        from mt5.orders import _select_filling_type
+        result = _select_filling_type(2)  # bit 1 only
+        assert result == mock_mt5.ORDER_FILLING_IOC
+
+    def test_fok_used_when_only_fok_supported(self, mock_mt5):
+        """FOK only (bit 0 set, bit 1 clear)."""
+        from mt5.orders import _select_filling_type
+        result = _select_filling_type(1)  # bit 0 only
+        assert result == mock_mt5.ORDER_FILLING_FOK
+
+    def test_return_used_as_fallback(self, mock_mt5):
+        """Neither FOK nor IOC → RETURN as fallback."""
+        from mt5.orders import _select_filling_type
+        result = _select_filling_type(0)
+        assert result == mock_mt5.ORDER_FILLING_RETURN
+
+
+class TestFillingModeIntegration:
+    """Verify place_market_order and close_position use the broker-selected filling type."""
+
+    def test_place_order_uses_ioc_when_broker_supports_ioc(self, mock_mt5):
+        mock_mt5.symbol_info.return_value.filling_mode = 2  # IOC supported
+        place_market_order("EURUSD", "LONG", 0.01, 1.09, 1.11, 10)
+        call_args = mock_mt5.order_send.call_args[0][0]
+        assert call_args["type_filling"] == mock_mt5.ORDER_FILLING_IOC
+
+    def test_place_order_uses_fok_when_only_fok_supported(self, mock_mt5):
+        mock_mt5.symbol_info.return_value.filling_mode = 1  # FOK only
+        place_market_order("EURUSD", "LONG", 0.01, 1.09, 1.11, 10)
+        call_args = mock_mt5.order_send.call_args[0][0]
+        assert call_args["type_filling"] == mock_mt5.ORDER_FILLING_FOK
+
+    def test_place_order_uses_return_when_neither_supported(self, mock_mt5):
+        mock_mt5.symbol_info.return_value.filling_mode = 0
+        place_market_order("EURUSD", "LONG", 0.01, 1.09, 1.11, 10)
+        call_args = mock_mt5.order_send.call_args[0][0]
+        assert call_args["type_filling"] == mock_mt5.ORDER_FILLING_RETURN
+
+    def test_close_position_uses_broker_filling_mode(self, mock_mt5):
+        mock_mt5.symbol_info.return_value.filling_mode = 1  # FOK only
+        close_position(ticket=111, symbol="EURUSD", lot=0.01, direction="LONG")
+        call_args = mock_mt5.order_send.call_args[0][0]
+        assert call_args["type_filling"] == mock_mt5.ORDER_FILLING_FOK
