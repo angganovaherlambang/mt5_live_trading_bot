@@ -52,12 +52,14 @@ class MonitorLoop:
         symbols: list[str],
         update_queue: queue.Queue,
         state_file: Path = STATE_FILE,
+        order_executor=None,
     ) -> None:
         self.connection = connection
         self.configs = configs
         self.symbols = symbols
         self.update_queue = update_queue
         self.state_file = state_file
+        self.order_executor = order_executor
         self._running = False
         self._thread: Optional[threading.Thread] = None
 
@@ -115,6 +117,10 @@ class MonitorLoop:
         indicators = calculate_indicators(df, config)
         state = self.states[symbol]
         self.states[symbol] = advance_state(state, df, indicators, config, bar_index=-2)
+
+        # Execute order if state machine reached AWAITING_ENTRY
+        if self.order_executor is not None:
+            self.order_executor.execute(symbol, self.states[symbol], indicators)
 
         self.update_queue.put({
             "symbol": symbol,

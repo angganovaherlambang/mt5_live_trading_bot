@@ -55,3 +55,34 @@ class TestMonitorLoop:
         loop = MonitorLoop(connection=mock_connection, configs=configs, symbols=symbols, update_queue=q)
         loop._process_symbol("EURUSD")
         assert q.empty()
+
+
+def test_executor_called_when_awaiting_entry(mock_connection, eurusd_config):
+    """When state reaches AWAITING_ENTRY, order_executor.execute() is called."""
+    from core.state import PhaseState, Phase
+    from monitor.loop import MonitorLoop
+    import queue
+
+    symbols = ["EURUSD"]
+    configs = {"EURUSD": eurusd_config}
+    q = queue.Queue()
+
+    mock_executor = MagicMock()
+    loop = MonitorLoop(
+        connection=mock_connection,
+        configs=configs,
+        symbols=symbols,
+        update_queue=q,
+        order_executor=mock_executor,
+    )
+
+    # Force state to AWAITING_ENTRY
+    loop.states["EURUSD"] = PhaseState(
+        symbol="EURUSD", phase=Phase.AWAITING_ENTRY, direction="LONG"
+    )
+
+    # Patch advance_state to preserve the AWAITING_ENTRY state (no transition)
+    with patch("monitor.loop.advance_state", side_effect=lambda s, *a, **k: s):
+        loop._process_symbol("EURUSD")
+
+    mock_executor.execute.assert_called_once()
