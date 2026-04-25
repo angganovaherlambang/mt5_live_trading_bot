@@ -1,5 +1,7 @@
 import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
+
+from mt5.orders import place_market_order, get_open_positions, close_position
 
 
 @pytest.fixture
@@ -30,7 +32,6 @@ def mock_mt5(mocker):
 
 class TestPlaceMarketOrder:
     def test_long_order_sends_buy(self, mock_mt5):
-        from mt5.orders import place_market_order
         result = place_market_order(
             symbol="EURUSD",
             direction="LONG",
@@ -44,7 +45,6 @@ class TestPlaceMarketOrder:
         assert call_args["type"] == mock_mt5.ORDER_TYPE_BUY
 
     def test_short_order_sends_sell(self, mock_mt5):
-        from mt5.orders import place_market_order
         result = place_market_order(
             symbol="EURUSD",
             direction="SHORT",
@@ -57,23 +57,19 @@ class TestPlaceMarketOrder:
         assert call_args["type"] == mock_mt5.ORDER_TYPE_SELL
 
     def test_returns_none_on_mt5_failure(self, mock_mt5):
-        from mt5.orders import place_market_order
         mock_mt5.order_send.return_value.retcode = 10004  # REQUOTE
         result = place_market_order("EURUSD", "LONG", 0.01, 1.09, 1.11, 10)
         assert result is None
 
     def test_sl_tp_rounded_to_digits(self, mock_mt5):
-        from mt5.orders import place_market_order
         place_market_order("EURUSD", "LONG", 0.01, 1.09551234, 1.10998765, 10)
         call_args = mock_mt5.order_send.call_args[0][0]
-        # digits=5, so SL and TP should have at most 5 decimal places
-        assert len(str(call_args["sl"]).split(".")[-1]) <= 5
-        assert len(str(call_args["tp"]).split(".")[-1]) <= 5
+        assert call_args["sl"] == round(1.09551234, 5)
+        assert call_args["tp"] == round(1.10998765, 5)
 
 
 class TestGetOpenPositions:
     def test_returns_list_of_dicts(self, mock_mt5):
-        from mt5.orders import get_open_positions
         pos = MagicMock()
         pos.ticket = 111
         pos.symbol = "EURUSD"
@@ -89,6 +85,25 @@ class TestGetOpenPositions:
         assert result[0]["symbol"] == "EURUSD"
 
     def test_returns_empty_list_when_no_positions(self, mock_mt5):
-        from mt5.orders import get_open_positions
         mock_mt5.positions_get.return_value = []
         assert get_open_positions("EURUSD") == []
+
+
+class TestClosePosition:
+    def test_returns_true_on_success(self, mock_mt5):
+        result = close_position(ticket=111, symbol="EURUSD", lot=0.01, direction="LONG")
+        assert result is True
+        call_args = mock_mt5.order_send.call_args[0][0]
+        assert call_args["position"] == 111
+        assert call_args["type"] == mock_mt5.ORDER_TYPE_SELL  # closing LONG = SELL
+
+    def test_returns_false_on_failure(self, mock_mt5):
+        mock_mt5.order_send.return_value.retcode = 10004
+        result = close_position(ticket=111, symbol="EURUSD", lot=0.01, direction="LONG")
+        assert result is False
+
+    def test_returns_false_when_no_tick(self, mock_mt5):
+        mock_mt5.symbol_info_tick.return_value = None
+        result = close_position(ticket=111, symbol="EURUSD", lot=0.01, direction="LONG")
+        assert result is False
+        mock_mt5.order_send.assert_not_called()

@@ -57,6 +57,10 @@ def place_market_order(
         logger.error("Cannot get tick for %s", symbol)
         return None
 
+    if direction not in ("LONG", "SHORT"):
+        logger.error("%s: invalid direction %r", symbol, direction)
+        return None
+
     order_type = mt5.ORDER_TYPE_BUY if direction == "LONG" else mt5.ORDER_TYPE_SELL
     price = tick.ask if direction == "LONG" else tick.bid
 
@@ -99,6 +103,7 @@ def get_open_positions(symbol: str) -> list[dict]:
     Returns [] if no positions or MT5 unavailable.
     """
     if mt5 is None:
+        logger.warning("MetaTrader5 not available, cannot get positions for %s", symbol)
         return []
 
     positions = mt5.positions_get(symbol=symbol)
@@ -132,8 +137,15 @@ def close_position(ticket: int, symbol: str, lot: float, direction: str) -> bool
         logger.error("Cannot get tick to close position %d", ticket)
         return False
 
+    if direction not in ("LONG", "SHORT"):
+        logger.error("%s: invalid direction %r for close", symbol, direction)
+        return False
+
     sym_info = mt5.symbol_info(symbol)
-    digits = sym_info.digits if sym_info else 5
+    if sym_info is None:
+        logger.error("Cannot get symbol info to close position %d for %s", ticket, symbol)
+        return False
+    digits = sym_info.digits
 
     close_type = mt5.ORDER_TYPE_SELL if direction == "LONG" else mt5.ORDER_TYPE_BUY
     price = tick.bid if direction == "LONG" else tick.ask
