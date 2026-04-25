@@ -45,9 +45,14 @@ class TestCalculateSlTp:
         assert abs(sl - expected_sl) < 1e-8
         assert abs(tp - expected_tp) < 1e-8
 
+    def test_invalid_direction_raises(self):
+        with pytest.raises(ValueError, match="direction must be"):
+            calculate_sl_tp("BUY", 1.1000, 0.0003, 1.5, 10.0)
+
 
 class TestCalculateLotSize:
     def test_basic_lot_calculation(self):
+        # risk=$100, sl=30pip, pip_value=$10/lot → raw=0.3333..., floor to 0.33
         lot = calculate_lot_size(
             risk_amount=100.0,
             sl_pips=30.0,
@@ -56,7 +61,7 @@ class TestCalculateLotSize:
             max_lot=1.0,
             lot_step=0.01,
         )
-        assert 0.01 <= lot <= 1.0
+        assert lot == 0.33
 
     def test_respects_max_lot(self):
         lot = calculate_lot_size(
@@ -101,3 +106,14 @@ class TestCalculateLotSize:
             lot_step=0.01,
         )
         assert lot >= 0.01
+
+    def test_zero_risk_returns_min_lot(self):
+        lot = calculate_lot_size(
+            risk_amount=0.0,
+            sl_pips=30.0,
+            pip_value_per_lot=10.0,
+            min_lot=0.01,
+            max_lot=1.0,
+            lot_step=0.01,
+        )
+        assert lot == 0.01

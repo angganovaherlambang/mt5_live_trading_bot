@@ -23,6 +23,9 @@ def calculate_sl_tp(
     For SHORT: SL = entry + atr * sl_multiplier
                TP = entry - atr * tp_multiplier
     """
+    if direction not in ("LONG", "SHORT"):
+        raise ValueError(f"direction must be 'LONG' or 'SHORT', got {direction!r}")
+
     sl_distance = atr * sl_multiplier
     tp_distance = atr * tp_multiplier
 
@@ -52,7 +55,7 @@ def calculate_lot_size(
     max_lot          : hard cap (e.g. 0.5 for safety)
     lot_step         : broker lot step (e.g. 0.01)
     """
-    if sl_pips <= 0 or pip_value_per_lot <= 0:
+    if risk_amount <= 0 or sl_pips <= 0 or pip_value_per_lot <= 0:
         return min_lot
 
     raw = risk_amount / (sl_pips * pip_value_per_lot)
