@@ -27,18 +27,6 @@ def executor(mock_connection, eurusd_config):
     )
 
 
-@pytest.fixture
-def live_executor(mock_connection, eurusd_config):
-    """Executor with demo_mode=False so place_market_order is actually called."""
-    return OrderExecutor(
-        connection=mock_connection,
-        configs={"EURUSD": eurusd_config},
-        risk_pct=0.01,
-        max_lot=0.5,
-        demo_mode=False,
-    )
-
-
 class TestOrderExecutor:
     def test_skips_if_not_awaiting_entry(self, executor, eurusd_config):
         state = PhaseState(symbol="EURUSD", phase=Phase.SCANNING)
@@ -47,30 +35,47 @@ class TestOrderExecutor:
             executor.execute("EURUSD", state, indicators)
             mock_place.assert_not_called()
 
-    def test_places_order_when_awaiting_entry_long(self, live_executor, eurusd_config):
-        state = PhaseState(
-            symbol="EURUSD",
-            phase=Phase.AWAITING_ENTRY,
-            direction="LONG",
+    def test_live_mode_raises_not_implemented(self, mock_connection, eurusd_config):
+        live_executor = OrderExecutor(
+            connection=mock_connection,
+            configs={"EURUSD": eurusd_config},
+            risk_pct=0.01,
+            max_lot=0.5,
+            demo_mode=False,
         )
+        state = PhaseState(symbol="EURUSD", phase=Phase.AWAITING_ENTRY, direction="LONG")
         indicators = {"atr": 0.0003, "trend": "BULLISH"}
-        with patch("monitor.trader.place_market_order", return_value=999) as mock_place, \
-             patch("monitor.trader.get_open_positions", return_value=[]):
-            live_executor.execute("EURUSD", state, indicators)
-            mock_place.assert_called_once()
-            call_kwargs = mock_place.call_args
-            assert call_kwargs[1]["direction"] == "LONG" or call_kwargs[0][1] == "LONG"
+        with patch("monitor.trader.get_open_positions", return_value=[]):
+            with pytest.raises(NotImplementedError):
+                live_executor.execute("EURUSD", state, indicators)
+        # State must still reset even when exception raised
+        assert state.phase == Phase.SCANNING
 
-    def test_resets_state_to_scanning_after_order(self, live_executor, eurusd_config):
+    def test_demo_mode_logs_and_skips_place_order(self, executor, eurusd_config):
+        """Demo mode should log intent but never call place_market_order."""
         state = PhaseState(
             symbol="EURUSD",
             phase=Phase.AWAITING_ENTRY,
             direction="LONG",
         )
         indicators = {"atr": 0.0003, "trend": "BULLISH"}
-        with patch("monitor.trader.place_market_order", return_value=999), \
+        with patch("monitor.trader.place_market_order") as mock_place, \
              patch("monitor.trader.get_open_positions", return_value=[]):
-            live_executor.execute("EURUSD", state, indicators)
+            executor.execute("EURUSD", state, indicators)
+            mock_place.assert_not_called()
+        assert state.phase == Phase.SCANNING
+
+    def test_resets_state_to_scanning_after_order(self, executor, eurusd_config):
+        state = PhaseState(
+            symbol="EURUSD",
+            phase=Phase.AWAITING_ENTRY,
+            direction="LONG",
+        )
+        indicators = {"atr": 0.0003, "trend": "BULLISH"}
+        with patch("monitor.trader.place_market_order") as mock_place, \
+             patch("monitor.trader.get_open_positions", return_value=[]):
+            executor.execute("EURUSD", state, indicators)
+            mock_place.assert_not_called()  # demo mode: no actual order
         assert state.phase == Phase.SCANNING
 
     def test_skips_if_position_already_open(self, executor, eurusd_config):
@@ -89,17 +94,25 @@ class TestOrderExecutor:
         # State must still reset
         assert state.phase == Phase.SCANNING
 
-    def test_resets_state_if_order_fails(self, live_executor, eurusd_config):
+    def test_resets_state_if_order_fails(self, mock_connection, eurusd_config):
+        """State resets even when live mode raises NotImplementedError."""
+        live_executor = OrderExecutor(
+            connection=mock_connection,
+            configs={"EURUSD": eurusd_config},
+            risk_pct=0.01,
+            max_lot=0.5,
+            demo_mode=False,
+        )
         state = PhaseState(
             symbol="EURUSD",
             phase=Phase.AWAITING_ENTRY,
             direction="LONG",
         )
         indicators = {"atr": 0.0003, "trend": "BULLISH"}
-        with patch("monitor.trader.place_market_order", return_value=None), \
-             patch("monitor.trader.get_open_positions", return_value=[]):
-            live_executor.execute("EURUSD", state, indicators)
-        # Even on failure, reset to avoid infinite retry
+        with patch("monitor.trader.get_open_positions", return_value=[]):
+            with pytest.raises(NotImplementedError):
+                live_executor.execute("EURUSD", state, indicators)
+        # Even on exception, reset to avoid infinite retry
         assert state.phase == Phase.SCANNING
 
     def test_skips_if_no_config(self, mock_connection, eurusd_config):
@@ -115,3 +128,29 @@ class TestOrderExecutor:
         with patch("monitor.trader.place_market_order") as mock_place:
             executor.execute("EURUSD", state, indicators)
             mock_place.assert_not_called()
+
+    def test_skips_if_atr_invalid(self, executor):
+        state = PhaseState(symbol="EURUSD", phase=Phase.AWAITING_ENTRY, direction="LONG")
+        indicators = {"atr": 0.0, "trend": "BULLISH"}  # ATR = 0
+        with patch("monitor.trader.place_market_order") as mock_place, \
+             patch("monitor.trader.get_open_positions", return_value=[]):
+            executor.execute("EURUSD", state, indicators)
+            mock_place.assert_not_called()
+        assert state.phase == Phase.SCANNING
+
+    def test_skips_if_account_info_none(self, mock_connection, eurusd_config):
+        mock_connection.get_account_info.return_value = None
+        exec_ = OrderExecutor(
+            connection=mock_connection,
+            configs={"EURUSD": eurusd_config},
+            risk_pct=0.01,
+            max_lot=0.5,
+            demo_mode=True,
+        )
+        state = PhaseState(symbol="EURUSD", phase=Phase.AWAITING_ENTRY, direction="LONG")
+        indicators = {"atr": 0.0003, "trend": "BULLISH"}
+        with patch("monitor.trader.place_market_order") as mock_place, \
+             patch("monitor.trader.get_open_positions", return_value=[]):
+            exec_.execute("EURUSD", state, indicators)
+            mock_place.assert_not_called()
+        assert state.phase == Phase.SCANNING

@@ -13,7 +13,6 @@ Always resets state — never leaves a symbol stuck in AWAITING_ENTRY.
 """
 from __future__ import annotations
 import logging
-from typing import Optional
 
 from core.state import PhaseState, Phase
 from mt5.orders import place_market_order, get_open_positions
@@ -24,7 +23,10 @@ logger = logging.getLogger(__name__)
 # Pip size for lot-size calculation
 _PIP_SIZE_DEFAULT = 0.0001
 _PIP_SIZE_JPY = 0.01
-_PIP_VALUE_PER_LOT_USD = 10.0  # approximate for non-JPY vs USD pairs
+# Approximate pip value in USD for standard lot on major USD-quote pairs (e.g. EUR/USD).
+# For non-USD-quote pairs (e.g. USD/CHF, EUR/GBP), this will be inaccurate.
+# A production system should query mt5.symbol_info() for accurate contract specs.
+_PIP_VALUE_PER_LOT_USD = 10.0
 
 
 class OrderExecutor:
@@ -121,33 +123,11 @@ class OrderExecutor:
             )
             return
 
-        # In live mode, pass ATR-based SL/TP distances relative to entry=0
-        # orders.py fetches live price; we pass absolute SL/TP levels
-        # Note: since we don't know fill price ahead of time, use atr distances
-        # as approximate offset from 0.0. This is a known limitation documented
-        # in the plan — a production system should re-calc after fill confirmation.
-        sl_price, tp_price = calculate_sl_tp(
-            direction=direction,
-            entry_price=0.0,
-            atr=atr,
-            sl_multiplier=sl_mult,
-            tp_multiplier=tp_mult,
+        # Live order placement — SL/TP require the actual fill price which is
+        # only known after MT5 executes the order. This is a known limitation:
+        # post-fill SL/TP modification is not yet implemented.
+        # Until fill-price feedback is added, live mode is not safe to use.
+        raise NotImplementedError(
+            f"{symbol}: live order SL/TP requires post-fill price. "
+            "Use demo_mode=True until fill-price feedback is implemented."
         )
-
-        ticket = place_market_order(
-            symbol=symbol,
-            direction=direction,
-            lot=lot,
-            sl=abs(sl_price),
-            tp=abs(tp_price),
-            deviation=10,
-            comment=f"sunrise_{direction.lower()}",
-        )
-
-        if ticket:
-            logger.info(
-                "%s: order placed ticket=%d direction=%s lot=%.2f",
-                symbol, ticket, direction, lot,
-            )
-        else:
-            logger.error("%s: order placement failed", symbol)
