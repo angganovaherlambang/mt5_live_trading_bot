@@ -4607,5 +4607,16 @@ def main():
         traceback.print_exc()
 
 if __name__ == "__main__":
-    main()
+    import warnings
+    warnings.warn(
+        "advanced_mt5_monitor_gui.py is deprecated. Use `python main.py` instead.",
+        DeprecationWarning,
+        stacklevel=1,
+    )
+    import tkinter as tk
+    from gui.app import AdvancedMT5TradingMonitorGUI
+    root = tk.Tk()
+    root.geometry("1400x900")
+    AdvancedMT5TradingMonitorGUI(root)
+    root.mainloop()
 

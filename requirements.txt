@@ -27,6 +27,7 @@ requests>=2.28.0              # HTTP requests (for future API features)
 psutil>=5.9.0                 # System monitoring (for performance tracking)
 
 # === DEVELOPMENT & TESTING ===
-# pytest>=7.0.0               # Testing framework (uncomment if needed)
+pytest>=7.4.0                  # Testing framework
+pytest-mock>=3.12.0            # Mock fixtures for pytest
 # black>=22.0.0                # Code formatting (uncomment if needed)
 # flake8>=5.0.0                # Code linting (uncomment if needed)

@@ -29,3 +29,7 @@ extraPaths = ["strategies"]
 [tool.pyright]
 include = ["src", "strategies"]
 extraPaths = ["strategies"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
