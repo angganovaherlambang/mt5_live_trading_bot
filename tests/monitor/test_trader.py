@@ -335,3 +335,94 @@ class TestCheckInTrade:
             executor.check_in_trade("EURUSD", state)
             mock_pos.assert_not_called()
         assert state.phase == Phase.SCANNING
+
+
+class TestUpdateTrailingStop:
+    """Tests for OrderExecutor.update_trailing_stop()."""
+
+    def _make_live_executor(self, mock_connection, eurusd_config):
+        return OrderExecutor(
+            connection=mock_connection,
+            configs={"EURUSD": eurusd_config},
+            risk_pct=0.01,
+            max_lot=0.5,
+            demo_mode=False,
+        )
+
+    def test_moves_long_sl_up_when_profitable(self, mock_connection, eurusd_config):
+        """LONG: candidate SL > current SL → call set_position_sltp."""
+        executor = self._make_live_executor(mock_connection, eurusd_config)
+        state = PhaseState(symbol="EURUSD", phase=Phase.IN_TRADE, direction="LONG")
+        state.active_ticket = 111
+        indicators = {"atr": 0.0010}
+        # sl_mult = 1.5 (long_atr_sl_multiplier from eurusd_config)
+        # candidate_sl = 1.1050 - 0.0010 * 1.5 = 1.1035
+        # current_sl = 1.0900 → 1.1035 > 1.0900 → should move
+        open_pos = [{"ticket": 111, "symbol": "EURUSD", "type": "BUY",
+                     "volume": 0.01, "price_open": 1.1000, "sl": 1.0900, "tp": 1.1200}]
+        with patch("monitor.trader.get_open_positions", return_value=open_pos), \
+             patch("monitor.trader.get_current_price", return_value=1.1050), \
+             patch("monitor.trader.set_position_sltp", return_value=True) as mock_sltp:
+            executor.update_trailing_stop("EURUSD", state, indicators)
+        mock_sltp.assert_called_once_with(111, "EURUSD", pytest.approx(1.1035, abs=1e-5), 1.1200)
+
+    def test_does_not_widen_long_sl(self, mock_connection, eurusd_config):
+        """LONG: candidate SL <= current SL → do NOT call set_position_sltp."""
+        executor = self._make_live_executor(mock_connection, eurusd_config)
+        state = PhaseState(symbol="EURUSD", phase=Phase.IN_TRADE, direction="LONG")
+        state.active_ticket = 111
+        indicators = {"atr": 0.0010}
+        # candidate_sl = 1.0900 - 0.0015 = 1.0885 < current_sl 1.0950 → do NOT move
+        open_pos = [{"ticket": 111, "symbol": "EURUSD", "type": "BUY",
+                     "volume": 0.01, "price_open": 1.1000, "sl": 1.0950, "tp": 1.1200}]
+        with patch("monitor.trader.get_open_positions", return_value=open_pos), \
+             patch("monitor.trader.get_current_price", return_value=1.0900), \
+             patch("monitor.trader.set_position_sltp") as mock_sltp:
+            executor.update_trailing_stop("EURUSD", state, indicators)
+        mock_sltp.assert_not_called()
+
+    def test_moves_short_sl_down_when_profitable(self, mock_connection, eurusd_config):
+        """SHORT: candidate SL < current SL → call set_position_sltp."""
+        config = {**eurusd_config, "short_atr_sl_multiplier": 1.5}
+        executor = OrderExecutor(connection=mock_connection, configs={"EURUSD": config},
+                                  risk_pct=0.01, max_lot=0.5, demo_mode=False)
+        state = PhaseState(symbol="EURUSD", phase=Phase.IN_TRADE, direction="SHORT")
+        state.active_ticket = 222
+        indicators = {"atr": 0.0010}
+        # candidate_sl = 1.0950 + 0.0015 = 1.0965 < current_sl 1.1050 → should move
+        open_pos = [{"ticket": 222, "symbol": "EURUSD", "type": "SELL",
+                     "volume": 0.01, "price_open": 1.1000, "sl": 1.1050, "tp": 1.0800}]
+        with patch("monitor.trader.get_open_positions", return_value=open_pos), \
+             patch("monitor.trader.get_current_price", return_value=1.0950), \
+             patch("monitor.trader.set_position_sltp", return_value=True) as mock_sltp:
+            executor.update_trailing_stop("EURUSD", state, indicators)
+        mock_sltp.assert_called_once_with(222, "EURUSD", pytest.approx(1.0965, abs=1e-5), 1.0800)
+
+    def test_skips_when_not_in_trade(self, mock_connection, eurusd_config):
+        """No-op when phase != IN_TRADE."""
+        executor = self._make_live_executor(mock_connection, eurusd_config)
+        state = PhaseState(symbol="EURUSD", phase=Phase.SCANNING)
+        with patch("monitor.trader.get_open_positions") as mock_pos:
+            executor.update_trailing_stop("EURUSD", state, {"atr": 0.001})
+        mock_pos.assert_not_called()
+
+    def test_skips_when_atr_invalid(self, mock_connection, eurusd_config):
+        """No-op when ATR is zero."""
+        executor = self._make_live_executor(mock_connection, eurusd_config)
+        state = PhaseState(symbol="EURUSD", phase=Phase.IN_TRADE, direction="LONG")
+        state.active_ticket = 111
+        with patch("monitor.trader.get_open_positions") as mock_pos:
+            executor.update_trailing_stop("EURUSD", state, {"atr": 0.0})
+        mock_pos.assert_not_called()
+
+    def test_skips_when_ticket_not_in_positions(self, mock_connection, eurusd_config):
+        """No-op when active_ticket not found in open positions (race condition)."""
+        executor = self._make_live_executor(mock_connection, eurusd_config)
+        state = PhaseState(symbol="EURUSD", phase=Phase.IN_TRADE, direction="LONG")
+        state.active_ticket = 999
+        open_pos = [{"ticket": 111, "symbol": "EURUSD", "type": "BUY",
+                     "volume": 0.01, "price_open": 1.1, "sl": 1.09, "tp": 1.12}]
+        with patch("monitor.trader.get_open_positions", return_value=open_pos), \
+             patch("monitor.trader.set_position_sltp") as mock_sltp:
+            executor.update_trailing_stop("EURUSD", state, {"atr": 0.001})
+        mock_sltp.assert_not_called()

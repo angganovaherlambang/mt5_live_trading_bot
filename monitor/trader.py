@@ -22,6 +22,7 @@ from mt5.orders import (
     get_open_positions,
     get_symbol_info,
     get_current_price,
+    set_position_sltp,
 )
 from mt5.risk import calculate_sl_tp, calculate_lot_size_from_point_value
 
@@ -86,6 +87,59 @@ class OrderExecutor:
                 symbol, state.active_ticket,
             )
             state.reset()
+
+    def update_trailing_stop(self, symbol: str, state: PhaseState, indicators: dict) -> None:
+        """
+        Tighten SL toward the current price each candle while in-trade.
+
+        Computes candidate SL = current_price ∓ atr × sl_multiplier and calls
+        set_position_sltp() only when the candidate is strictly better than the
+        current SL — never widens the stop.
+
+        LONG : SL moves up   (candidate > current_sl)
+        SHORT: SL moves down (candidate < current_sl)
+        """
+        if state.phase != Phase.IN_TRADE:
+            return
+
+        atr = indicators.get("atr", 0.0)
+        if atr <= 0:
+            return
+
+        direction = state.direction
+        if direction not in ("LONG", "SHORT"):
+            return
+
+        positions = get_open_positions(symbol)
+        position = next((p for p in positions if p["ticket"] == state.active_ticket), None)
+        if position is None:
+            return
+
+        current_price = get_current_price(symbol, direction)
+        if current_price is None:
+            return
+
+        config = self.configs.get(symbol, {})
+        sl_mult = float(config.get(f"{direction.lower()}_atr_sl_multiplier", 1.5))
+        current_sl = position["sl"]
+        current_tp = position["tp"]
+
+        if direction == "LONG":
+            candidate_sl = current_price - atr * sl_mult
+            if candidate_sl > current_sl:
+                logger.info(
+                    "%s: trailing stop LONG SL %.5f → %.5f",
+                    symbol, current_sl, candidate_sl,
+                )
+                set_position_sltp(state.active_ticket, symbol, candidate_sl, current_tp)
+        else:  # SHORT
+            candidate_sl = current_price + atr * sl_mult
+            if candidate_sl < current_sl:
+                logger.info(
+                    "%s: trailing stop SHORT SL %.5f → %.5f",
+                    symbol, current_sl, candidate_sl,
+                )
+                set_position_sltp(state.active_ticket, symbol, candidate_sl, current_tp)
 
     def _attempt_order(self, symbol: str, state: PhaseState, indicators: dict) -> Optional[int]:
         """
