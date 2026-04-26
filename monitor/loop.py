@@ -117,6 +117,24 @@ class MonitorLoop:
 
         indicators = calculate_indicators(df, config)
         state = self.states[symbol]
+
+        # IN_TRADE: skip scan/advance, just check whether position is still open
+        if state.phase == Phase.IN_TRADE:
+            if self.order_executor is not None:
+                self.order_executor.check_in_trade(symbol, state)
+            self.update_queue.put({
+                "symbol": symbol,
+                "phase": state.phase.value,
+                "direction": state.direction,
+                "pullback_count": state.pullback_count,
+                "window_open": state.window_open,
+                "atr": indicators["atr"],
+                "trend": indicators["trend"],
+                "timestamp": datetime.now(tz=timezone.utc).isoformat(),
+            })
+            return
+
+        # Normal scan flow: advance state machine then attempt entry
         self.states[symbol] = advance_state(state, df, indicators, config, bar_index=-2)
 
         # execute() resets state to SCANNING on completion; update_queue reflects post-execution state

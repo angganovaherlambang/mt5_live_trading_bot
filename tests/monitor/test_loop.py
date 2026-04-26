@@ -107,3 +107,67 @@ class TestMonitorLoop:
         mock_executor.execute.assert_called_once()
         call_args = mock_executor.execute.call_args
         assert call_args[0][1].phase == Phase.SCANNING
+
+    def test_in_trade_calls_check_in_trade_not_execute(self, mock_connection, eurusd_config):
+        """When phase is IN_TRADE, check_in_trade() is called; execute() is NOT."""
+        symbols = ["EURUSD"]
+        configs = {"EURUSD": eurusd_config}
+        q = queue.Queue()
+        mock_executor = MagicMock()
+        loop = MonitorLoop(
+            connection=mock_connection,
+            configs=configs,
+            symbols=symbols,
+            update_queue=q,
+            order_executor=mock_executor,
+        )
+        loop.states["EURUSD"] = PhaseState(symbol="EURUSD", phase=Phase.IN_TRADE)
+        loop.states["EURUSD"].active_ticket = 42
+
+        loop._process_symbol("EURUSD")
+
+        mock_executor.check_in_trade.assert_called_once_with("EURUSD", loop.states["EURUSD"])
+        mock_executor.execute.assert_not_called()
+
+    def test_in_trade_still_enqueues_update(self, mock_connection, eurusd_config):
+        """IN_TRADE path must still put an update on the queue."""
+        symbols = ["EURUSD"]
+        configs = {"EURUSD": eurusd_config}
+        q = queue.Queue()
+        mock_executor = MagicMock()
+        loop = MonitorLoop(
+            connection=mock_connection,
+            configs=configs,
+            symbols=symbols,
+            update_queue=q,
+            order_executor=mock_executor,
+        )
+        loop.states["EURUSD"] = PhaseState(symbol="EURUSD", phase=Phase.IN_TRADE)
+        loop.states["EURUSD"].active_ticket = 42
+
+        loop._process_symbol("EURUSD")
+
+        assert not q.empty()
+        update = q.get_nowait()
+        assert update["symbol"] == "EURUSD"
+        assert update["phase"] == "IN_TRADE"
+
+    def test_in_trade_skips_advance_state(self, mock_connection, eurusd_config):
+        """advance_state is NOT called when phase is IN_TRADE."""
+        symbols = ["EURUSD"]
+        configs = {"EURUSD": eurusd_config}
+        q = queue.Queue()
+        mock_executor = MagicMock()
+        loop = MonitorLoop(
+            connection=mock_connection,
+            configs=configs,
+            symbols=symbols,
+            update_queue=q,
+            order_executor=mock_executor,
+        )
+        loop.states["EURUSD"] = PhaseState(symbol="EURUSD", phase=Phase.IN_TRADE)
+        loop.states["EURUSD"].active_ticket = 42
+
+        with patch("monitor.loop.advance_state") as mock_advance:
+            loop._process_symbol("EURUSD")
+            mock_advance.assert_not_called()
