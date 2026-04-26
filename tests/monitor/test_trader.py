@@ -94,7 +94,25 @@ class TestOrderExecutor:
              patch("monitor.trader.get_current_price", return_value=1.10010):
             live_executor.execute("EURUSD", state, indicators)
             mock_place.assert_called_once()
-        assert state.phase == Phase.SCANNING
+        assert state.phase == Phase.IN_TRADE
+
+    def test_live_mode_stores_ticket_in_state(self, mock_connection, eurusd_config, sym_info_dict):
+        """active_ticket is set to the returned ticket on success."""
+        live_executor = OrderExecutor(
+            connection=mock_connection,
+            configs={"EURUSD": eurusd_config},
+            risk_pct=0.01,
+            max_lot=0.5,
+            demo_mode=False,
+        )
+        state = PhaseState(symbol="EURUSD", phase=Phase.AWAITING_ENTRY, direction="LONG")
+        indicators = {"atr": 0.0003, "trend": "BULLISH"}
+        with patch("monitor.trader.place_market_order", return_value=777), \
+             patch("monitor.trader.get_open_positions", return_value=[]), \
+             patch("monitor.trader.get_symbol_info", return_value=sym_info_dict), \
+             patch("monitor.trader.get_current_price", return_value=1.10010):
+            live_executor.execute("EURUSD", state, indicators)
+        assert state.active_ticket == 777
 
     def test_live_mode_sltp_calculated_from_entry_price(
         self, mock_connection, eurusd_config, sym_info_dict
@@ -272,4 +290,48 @@ class TestOrderExecutor:
              patch("monitor.trader.get_current_price", return_value=1.10010):
             executor.execute("EURUSD", state, indicators)
             mock_place.assert_not_called()
+        assert state.phase == Phase.SCANNING
+
+
+class TestCheckInTrade:
+    """Tests for OrderExecutor.check_in_trade()."""
+
+    def _make_live_executor(self, mock_connection, eurusd_config):
+        return OrderExecutor(
+            connection=mock_connection,
+            configs={"EURUSD": eurusd_config},
+            risk_pct=0.01,
+            max_lot=0.5,
+            demo_mode=False,
+        )
+
+    def test_resets_when_position_closed(self, mock_connection, eurusd_config):
+        """When active_ticket is gone from positions, reset to SCANNING."""
+        executor = self._make_live_executor(mock_connection, eurusd_config)
+        state = PhaseState(symbol="EURUSD", phase=Phase.IN_TRADE)
+        state.active_ticket = 111
+        with patch("monitor.trader.get_open_positions", return_value=[]):
+            executor.check_in_trade("EURUSD", state)
+        assert state.phase == Phase.SCANNING
+        assert state.active_ticket is None
+
+    def test_stays_in_trade_when_position_still_open(self, mock_connection, eurusd_config):
+        """When active_ticket is still in positions, do not reset."""
+        executor = self._make_live_executor(mock_connection, eurusd_config)
+        state = PhaseState(symbol="EURUSD", phase=Phase.IN_TRADE)
+        state.active_ticket = 111
+        open_pos = [{"ticket": 111, "symbol": "EURUSD", "type": "BUY",
+                     "volume": 0.01, "price_open": 1.1, "sl": 1.09, "tp": 1.12}]
+        with patch("monitor.trader.get_open_positions", return_value=open_pos):
+            executor.check_in_trade("EURUSD", state)
+        assert state.phase == Phase.IN_TRADE
+        assert state.active_ticket == 111
+
+    def test_skips_when_not_in_trade(self, mock_connection, eurusd_config):
+        """check_in_trade is a no-op when phase != IN_TRADE."""
+        executor = self._make_live_executor(mock_connection, eurusd_config)
+        state = PhaseState(symbol="EURUSD", phase=Phase.SCANNING)
+        with patch("monitor.trader.get_open_positions") as mock_pos:
+            executor.check_in_trade("EURUSD", state)
+            mock_pos.assert_not_called()
         assert state.phase == Phase.SCANNING

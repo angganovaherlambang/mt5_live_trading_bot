@@ -9,12 +9,12 @@ reaches Phase.AWAITING_ENTRY, this module:
   4. Calculates SL/TP absolute levels from entry price + ATR multipliers
   5. Calculates lot size using the MT5-native value_per_point formula
   6. Places a market order via mt5.orders (live) or logs intent (demo)
-  7. Resets the PhaseState to SCANNING — never leaves a symbol stuck in AWAITING_ENTRY
-
-Always resets state — never leaves a symbol stuck in AWAITING_ENTRY.
+  7. On success: transitions state to IN_TRADE with the order ticket.
+     On failure or demo mode: resets state to SCANNING.
 """
 from __future__ import annotations
 import logging
+from typing import Optional
 
 from core.state import PhaseState, Phase
 from mt5.orders import (
@@ -58,18 +58,39 @@ class OrderExecutor:
     def execute(self, symbol: str, state: PhaseState, indicators: dict) -> None:
         """
         Called once per candle per symbol by MonitorLoop.
-        Mutates `state` (resets to SCANNING when done).
+        On success: transitions state to IN_TRADE with the order ticket.
+        On failure or demo mode: resets state to SCANNING.
         """
         if state.phase != Phase.AWAITING_ENTRY:
             return
 
-        try:
-            self._attempt_order(symbol, state, indicators)
-        finally:
-            # Always reset — never leave a symbol stuck in AWAITING_ENTRY
+        ticket = self._attempt_order(symbol, state, indicators)
+        if ticket:
+            state.phase = Phase.IN_TRADE
+            state.active_ticket = ticket
+        else:
             state.reset()
 
-    def _attempt_order(self, symbol: str, state: PhaseState, indicators: dict) -> None:
+    def check_in_trade(self, symbol: str, state: PhaseState) -> None:
+        """
+        Called each candle when phase == IN_TRADE.
+        Resets to SCANNING when the active position is no longer open.
+        """
+        if state.phase != Phase.IN_TRADE:
+            return
+        positions = get_open_positions(symbol)
+        active_tickets = {p["ticket"] for p in positions}
+        if state.active_ticket not in active_tickets:
+            logger.info(
+                "%s: position %d closed (SL/TP or manual), resetting to SCANNING",
+                symbol, state.active_ticket,
+            )
+            state.reset()
+
+    def _attempt_order(self, symbol: str, state: PhaseState, indicators: dict) -> Optional[int]:
+        """
+        Try to place a market order. Returns the ticket int on success, None otherwise.
+        """
         config = self.configs.get(symbol)
         if not config:
             logger.warning("%s: no config found, skipping order", symbol)
@@ -78,24 +99,24 @@ class OrderExecutor:
         direction = state.direction
         if direction not in ("LONG", "SHORT"):
             logger.warning("%s: invalid direction %r, skipping", symbol, direction)
-            return
+            return None
 
         atr = indicators.get("atr", 0.0)
         if atr <= 0:
             logger.warning("%s: ATR=%.6f is invalid, skipping order", symbol, atr)
-            return
+            return None
 
         # Skip if position already open for this symbol
         open_positions = get_open_positions(symbol)
         if open_positions:
             logger.info("%s: position already open, skipping new entry", symbol)
-            return
+            return None
 
         # Account balance for risk sizing
         account = self.connection.get_account_info()
         if account is None:
             logger.error("%s: cannot get account info, skipping order", symbol)
-            return
+            return None
 
         balance = account["balance"]
 
@@ -103,13 +124,13 @@ class OrderExecutor:
         sym_info = get_symbol_info(symbol)
         if sym_info is None:
             logger.error("%s: cannot get symbol info, skipping order", symbol)
-            return
+            return None
 
         # Current bid/ask — used as expected entry price for SL/TP calculation
         entry_price = get_current_price(symbol, direction)
         if entry_price is None:
             logger.error("%s: cannot get current price, skipping order", symbol)
-            return
+            return None
 
         # SL/TP multipliers from strategy config
         sl_mult = float(config.get(f"{direction.lower()}_atr_sl_multiplier", 1.5))
@@ -132,7 +153,7 @@ class OrderExecutor:
         point = sym_info["point"]
         if tick_size <= 0:
             logger.error("%s: broker returned invalid tick_size=%.8f, skipping order", symbol, tick_size)
-            return
+            return None
         value_per_point = tick_value / tick_size * point
 
         lot = calculate_lot_size_from_point_value(
@@ -150,7 +171,7 @@ class OrderExecutor:
                 "%s: DEMO — would place %s order: entry=%.5f sl=%.5f tp=%.5f lot=%.2f",
                 symbol, direction, entry_price, sl_price, tp_price, lot,
             )
-            return
+            return None
 
         ticket = place_market_order(
             symbol=symbol,
@@ -169,3 +190,4 @@ class OrderExecutor:
             )
         else:
             logger.error("%s: order placement failed", symbol)
+        return ticket
