@@ -122,6 +122,8 @@ class MonitorLoop:
         if state.phase == Phase.IN_TRADE:
             if self.order_executor is not None:
                 self.order_executor.check_in_trade(symbol, state)
+                if state.phase == Phase.IN_TRADE:  # still open after check
+                    self.order_executor.update_trailing_stop(symbol, state, indicators)
             self.update_queue.put({
                 "symbol": symbol,
                 "phase": state.phase.value,

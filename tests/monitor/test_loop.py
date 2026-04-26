@@ -171,3 +171,44 @@ class TestMonitorLoop:
         with patch("monitor.loop.advance_state") as mock_advance:
             loop._process_symbol("EURUSD")
             mock_advance.assert_not_called()
+
+    def test_in_trade_calls_update_trailing_stop_when_still_open(self, mock_connection, eurusd_config):
+        """After check_in_trade() leaves state as IN_TRADE, update_trailing_stop() is called."""
+        symbols = ["EURUSD"]
+        configs = {"EURUSD": eurusd_config}
+        q = queue.Queue()
+        mock_executor = MagicMock()
+        # check_in_trade does NOT reset state (position still open)
+        mock_executor.check_in_trade.side_effect = lambda sym, st: None
+        loop = MonitorLoop(
+            connection=mock_connection, configs=configs, symbols=symbols,
+            update_queue=q, order_executor=mock_executor,
+        )
+        loop.states["EURUSD"] = PhaseState(symbol="EURUSD", phase=Phase.IN_TRADE)
+        loop.states["EURUSD"].active_ticket = 42
+
+        loop._process_symbol("EURUSD")
+
+        mock_executor.update_trailing_stop.assert_called_once()
+
+    def test_in_trade_skips_trailing_stop_when_position_closed(self, mock_connection, eurusd_config):
+        """If check_in_trade() resets state to SCANNING, update_trailing_stop() is NOT called."""
+        symbols = ["EURUSD"]
+        configs = {"EURUSD": eurusd_config}
+        q = queue.Queue()
+        mock_executor = MagicMock()
+
+        def reset_state(sym, st):
+            st.reset()  # simulate position closed by broker
+
+        mock_executor.check_in_trade.side_effect = reset_state
+        loop = MonitorLoop(
+            connection=mock_connection, configs=configs, symbols=symbols,
+            update_queue=q, order_executor=mock_executor,
+        )
+        loop.states["EURUSD"] = PhaseState(symbol="EURUSD", phase=Phase.IN_TRADE)
+        loop.states["EURUSD"].active_ticket = 42
+
+        loop._process_symbol("EURUSD")
+
+        mock_executor.update_trailing_stop.assert_not_called()
