@@ -102,3 +102,75 @@ class TestTelegramListenerFetchUpdates:
             result = listener._fetch_updates()
         assert len(result) == 1
         assert result[0]["update_id"] == 5
+
+
+class TestNewCommands:
+    def _listener_with_callbacks(self, positions=None, balance=None):
+        return TelegramListener(
+            token="tok",
+            chat_id="12345",
+            get_status=lambda: {},
+            get_positions=positions or (lambda: []),
+            get_balance=balance or (lambda: None),
+        )
+
+    def test_positions_command_triggers_reply(self):
+        listener = self._listener_with_callbacks()
+        with patch.object(listener, "_reply_positions") as mock_fn:
+            listener._handle(_update(1, "/positions"))
+        mock_fn.assert_called_once()
+
+    def test_balance_command_triggers_reply(self):
+        listener = self._listener_with_callbacks()
+        with patch.object(listener, "_reply_balance") as mock_fn:
+            listener._handle(_update(1, "/balance"))
+        mock_fn.assert_called_once()
+
+    def test_help_command_triggers_reply(self):
+        listener = self._listener_with_callbacks()
+        with patch.object(listener, "_reply_help") as mock_fn:
+            listener._handle(_update(1, "/help"))
+        mock_fn.assert_called_once()
+
+    def test_positions_reply_shows_open_trades(self):
+        positions = [
+            {"symbol": "EURUSD", "type": "BUY", "volume": 0.01,
+             "price_open": 1.1000, "profit": 45.50, "ticket": 111},
+        ]
+        listener = self._listener_with_callbacks(positions=lambda: positions)
+        with patch.object(listener, "_send") as mock_send:
+            listener._reply_positions()
+        text = mock_send.call_args[0][0]
+        assert "EURUSD" in text
+        assert "45.50" in text
+
+    def test_positions_reply_shows_no_positions_message(self):
+        listener = self._listener_with_callbacks(positions=lambda: [])
+        with patch.object(listener, "_send") as mock_send:
+            listener._reply_positions()
+        text = mock_send.call_args[0][0]
+        assert "no open" in text.lower() or "0" in text
+
+    def test_balance_reply_shows_balance_and_equity(self):
+        balance_info = {"balance": 10250.75, "equity": 10310.20, "login": 12345}
+        listener = self._listener_with_callbacks(balance=lambda: balance_info)
+        with patch.object(listener, "_send") as mock_send:
+            listener._reply_balance()
+        text = mock_send.call_args[0][0]
+        assert "10250" in text
+        assert "10310" in text
+
+    def test_balance_reply_handles_no_connection(self):
+        listener = self._listener_with_callbacks(balance=lambda: None)
+        with patch.object(listener, "_send") as mock_send:
+            listener._reply_balance()
+        text = mock_send.call_args[0][0]
+        assert "unavailable" in text.lower() or "error" in text.lower() or "connect" in text.lower()
+
+    def test_help_reply_lists_all_commands(self):
+        listener = self._listener_with_callbacks()
+        with patch.object(listener, "_send") as mock_send:
+            listener._reply_help()
+        text = mock_send.call_args[0][0]
+        for cmd in ("/status", "/positions", "/balance", "/help"):
+            assert cmd in text
