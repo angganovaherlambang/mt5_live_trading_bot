@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 
 CANDLE_SECONDS = 300  # M5 = 5-minute bars
 STATE_FILE = Path("strategy_state.json")
+RECONNECT_AFTER_FAILED_TICKS = 2
 
 
 class MonitorLoop:
@@ -44,7 +45,8 @@ class MonitorLoop:
     symbols : list[str]
     update_queue : queue.Queue — GUI reads from this
     state_file : Path — where to persist PhaseState between restarts
-    order_executor : OrderExecutor, optional — if provided, called after advance_state(); resets state
+    order_executor : OrderExecutor, optional
+    notifier : TelegramNotifier, optional
     """
 
     def __init__(
@@ -67,12 +69,13 @@ class MonitorLoop:
         self._running = False
         self._thread: Optional[threading.Thread] = None
 
-        # Load persisted states or start fresh
         loaded = load_states(state_file, max_age_seconds=1800)
         self.states: dict[str, PhaseState] = {
             sym: loaded.get(sym, PhaseState(symbol=sym)) for sym in symbols
         }
         self._last_summary_date = None
+        self._last_heartbeat_date = None
+        self._consecutive_failed_ticks = 0
 
     def start(self) -> None:
         self._running = True
@@ -101,17 +104,57 @@ class MonitorLoop:
     def _tick(self) -> None:
         """Process all symbols on a candle close."""
         now = datetime.now(tz=timezone.utc)
+        success_count = 0
         for symbol in self.symbols:
             if not self._running:
                 break
             try:
-                self._process_symbol(symbol)
+                if self._process_symbol(symbol):
+                    success_count += 1
             except Exception as exc:
                 logger.exception("Error processing %s: %s", symbol, exc)
                 if self.notifier:
                     self.notifier.notify_error(symbol, str(exc))
+
+        if self.symbols:
+            if success_count == 0:
+                self._consecutive_failed_ticks += 1
+                if self._consecutive_failed_ticks >= RECONNECT_AFTER_FAILED_TICKS:
+                    self._consecutive_failed_ticks = 0
+                    self._attempt_reconnect()
+            else:
+                self._consecutive_failed_ticks = 0
+
         save_states(self.states, self.state_file)
         self._check_daily_summary(now)
+        self._check_heartbeat(now)
+
+    def _attempt_reconnect(self) -> None:
+        logger.warning("All symbols failed — attempting MT5 reconnect")
+        if self.connection.reconnect():
+            logger.info("MT5 reconnected")
+            if self.notifier:
+                self.notifier.send("🔄 MT5 reconnected successfully")
+        else:
+            logger.error("MT5 reconnect failed")
+            if self.notifier:
+                self.notifier.notify_error("MT5", "reconnect failed — check terminal")
+
+    def _check_heartbeat(self, now: datetime) -> None:
+        """Send daily alive ping at 07:00 UTC, once per day."""
+        if now.hour != 7 or now.minute != 0:
+            return
+        today = now.date()
+        if self._last_heartbeat_date == today:
+            return
+        self._last_heartbeat_date = today
+        if self.notifier is None:
+            return
+        in_trade = sum(1 for s in self.states.values() if s.phase == Phase.IN_TRADE)
+        self.notifier.send(
+            f"🤖 Bot alive — {len(self.symbols)} symbols active\n"
+            f"In trade: {in_trade} | {now.strftime('%Y-%m-%d %H:%M UTC')}"
+        )
 
     def _check_daily_summary(self, now: datetime) -> None:
         """Send daily P&L summary at 23:55 UTC, once per day."""
@@ -132,15 +175,19 @@ class MonitorLoop:
             total_profit=total_profit,
         )
 
-    def _process_symbol(self, symbol: str) -> None:
+    def _process_symbol(self, symbol: str) -> bool:
+        """
+        Process one symbol for the current candle.
+        Returns True if data was fetched and processed, False on skip.
+        """
         config = self.configs.get(symbol)
         if not config:
-            return
+            return False
 
         df = self.connection.fetch_ohlcv(symbol, timeframe=16385, count=151)  # 16385 = M5
         if df is None or len(df) < 50:
             logger.warning("%s: insufficient data, skipping", symbol)
-            return
+            return False
 
         indicators = calculate_indicators(df, config)
         state = self.states[symbol]
@@ -161,12 +208,11 @@ class MonitorLoop:
                 "trend": indicators["trend"],
                 "timestamp": datetime.now(tz=timezone.utc).isoformat(),
             })
-            return
+            return True
 
         # Normal scan flow: advance state machine then attempt entry
         self.states[symbol] = advance_state(state, df, indicators, config, bar_index=-2)
 
-        # execute() resets state to SCANNING on completion; update_queue reflects post-execution state
         if self.order_executor is not None:
             self.order_executor.execute(symbol, self.states[symbol], indicators)
 
@@ -180,3 +226,4 @@ class MonitorLoop:
             "trend": indicators["trend"],
             "timestamp": datetime.now(tz=timezone.utc).isoformat(),
         })
+        return True

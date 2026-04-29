@@ -266,3 +266,107 @@ class TestDailySummary:
         target_time = datetime(2026, 4, 30, 23, 55, 0, tzinfo=timezone.utc)
         with patch("monitor.loop.get_daily_deals", return_value=[]):
             loop._check_daily_summary(target_time)  # must not raise
+
+
+class TestHeartbeat:
+    def _make_loop(self, mock_connection, eurusd_config, notifier=None):
+        return MonitorLoop(
+            connection=mock_connection,
+            configs={"EURUSD": eurusd_config},
+            symbols=["EURUSD"],
+            update_queue=queue.Queue(),
+            notifier=notifier,
+        )
+
+    def test_sends_heartbeat_at_0700(self, mock_connection, eurusd_config):
+        mock_notifier = MagicMock()
+        loop = self._make_loop(mock_connection, eurusd_config, notifier=mock_notifier)
+        t = datetime(2026, 4, 30, 7, 0, 0, tzinfo=timezone.utc)
+        loop._check_heartbeat(t)
+        mock_notifier.send.assert_called_once()
+        assert "alive" in mock_notifier.send.call_args[0][0].lower()
+
+    def test_does_not_send_heartbeat_outside_0700(self, mock_connection, eurusd_config):
+        mock_notifier = MagicMock()
+        loop = self._make_loop(mock_connection, eurusd_config, notifier=mock_notifier)
+        for h, m in [(6, 59), (7, 1), (12, 0)]:
+            loop._check_heartbeat(datetime(2026, 4, 30, h, m, tzinfo=timezone.utc))
+        mock_notifier.send.assert_not_called()
+
+    def test_does_not_send_heartbeat_twice_same_day(self, mock_connection, eurusd_config):
+        mock_notifier = MagicMock()
+        loop = self._make_loop(mock_connection, eurusd_config, notifier=mock_notifier)
+        t = datetime(2026, 4, 30, 7, 0, 0, tzinfo=timezone.utc)
+        loop._check_heartbeat(t)
+        loop._check_heartbeat(t)
+        assert mock_notifier.send.call_count == 1
+
+    def test_skips_when_no_notifier(self, mock_connection, eurusd_config):
+        loop = self._make_loop(mock_connection, eurusd_config, notifier=None)
+        t = datetime(2026, 4, 30, 7, 0, 0, tzinfo=timezone.utc)
+        loop._check_heartbeat(t)  # must not raise
+
+
+class TestReconnect:
+    def test_calls_reconnect_after_consecutive_failed_ticks(self, mock_connection, eurusd_config):
+        """After RECONNECT_AFTER_FAILED_TICKS of zero data, connection.reconnect() is called."""
+        mock_connection.fetch_ohlcv.return_value = None
+        mock_notifier = MagicMock()
+        loop = MonitorLoop(
+            connection=mock_connection,
+            configs={"EURUSD": eurusd_config},
+            symbols=["EURUSD"],
+            update_queue=queue.Queue(),
+            notifier=mock_notifier,
+        )
+        with patch("monitor.loop.save_states"), \
+             patch.object(loop, "_check_daily_summary"), \
+             patch.object(loop, "_check_heartbeat"):
+            loop._tick()
+            loop._tick()
+        mock_connection.reconnect.assert_called_once()
+
+    def test_resets_failure_counter_on_success(self, mock_connection, eurusd_config):
+        """A successful tick resets the failure counter — no spurious reconnect."""
+        loop = MonitorLoop(
+            connection=mock_connection,
+            configs={"EURUSD": eurusd_config},
+            symbols=["EURUSD"],
+            update_queue=queue.Queue(),
+        )
+        loop._consecutive_failed_ticks = 1
+        with patch("monitor.loop.save_states"), \
+             patch.object(loop, "_check_daily_summary"), \
+             patch.object(loop, "_check_heartbeat"):
+            loop._tick()
+        assert loop._consecutive_failed_ticks == 0
+
+    def test_notifies_on_successful_reconnect(self, mock_connection, eurusd_config):
+        """Telegram notification is sent when reconnect succeeds."""
+        mock_connection.fetch_ohlcv.return_value = None
+        mock_connection.reconnect.return_value = True
+        mock_notifier = MagicMock()
+        loop = MonitorLoop(
+            connection=mock_connection,
+            configs={"EURUSD": eurusd_config},
+            symbols=["EURUSD"],
+            update_queue=queue.Queue(),
+            notifier=mock_notifier,
+        )
+        loop._attempt_reconnect()
+        mock_notifier.send.assert_called_once()
+        assert "reconnect" in mock_notifier.send.call_args[0][0].lower()
+
+    def test_notifies_on_failed_reconnect(self, mock_connection, eurusd_config):
+        """notify_error is called when reconnect fails."""
+        mock_connection.reconnect.return_value = False
+        mock_notifier = MagicMock()
+        loop = MonitorLoop(
+            connection=mock_connection,
+            configs={"EURUSD": eurusd_config},
+            symbols=["EURUSD"],
+            update_queue=queue.Queue(),
+            notifier=mock_notifier,
+        )
+        loop._attempt_reconnect()
+        mock_notifier.notify_error.assert_called_once()
