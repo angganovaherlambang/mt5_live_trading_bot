@@ -28,6 +28,7 @@ def save_states(states: dict[str, PhaseState], path: Path) -> None:
                 "signal_candle_index": state.signal_candle_index,
                 "signal_bar_time": state.signal_bar_time,
                 "direction": state.direction,
+                "active_ticket": state.active_ticket,
             }
             for symbol, state in states.items()
         },
@@ -69,6 +70,7 @@ def load_states(path: Path, max_age_seconds: int = 1800) -> dict[str, PhaseState
                 signal_candle_index=raw.get("signal_candle_index", 0),
                 signal_bar_time=raw.get("signal_bar_time"),
                 direction=raw.get("direction"),
+                active_ticket=raw.get("active_ticket"),
             )
             result[symbol] = state
         except (KeyError, ValueError) as exc:

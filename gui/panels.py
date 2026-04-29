@@ -25,10 +25,17 @@ class PanelsMixin:
         self.right_notebook.pack(fill=tk.BOTH, expand=True)
 
     def create_status_bar(self):
-        """Bottom bar: connection status + clock."""
+        """Bottom bar: connection status + DEMO/LIVE toggle + clock."""
         self.status_bar = ttk.Frame(self.root, relief=tk.SUNKEN)
         self.status_bar.pack(side=tk.BOTTOM, fill=tk.X)
         self.status_label = ttk.Label(self.status_bar, text="Disconnected")
         self.status_label.pack(side=tk.LEFT, padx=5)
+        self.mode_label = tk.Label(
+            self.status_bar, text="DEMO", foreground="#ffcc00",
+            bg=self.status_bar.cget("background"), font=("Courier", 9, "bold"),
+            cursor="hand2",
+        )
+        self.mode_label.pack(side=tk.LEFT, padx=10)
+        self.mode_label.bind("<Button-1>", lambda _: self.toggle_demo_mode())
         self.time_label = ttk.Label(self.status_bar, text="")
         self.time_label.pack(side=tk.RIGHT, padx=5)

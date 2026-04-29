@@ -43,6 +43,7 @@ class MonitorLoop:
     symbols : list[str]
     update_queue : queue.Queue — GUI reads from this
     state_file : Path — where to persist PhaseState between restarts
+    order_executor : OrderExecutor, optional — if provided, called after advance_state(); resets state
     """
 
     def __init__(
@@ -52,12 +53,14 @@ class MonitorLoop:
         symbols: list[str],
         update_queue: queue.Queue,
         state_file: Path = STATE_FILE,
+        order_executor=None,
     ) -> None:
         self.connection = connection
         self.configs = configs
         self.symbols = symbols
         self.update_queue = update_queue
         self.state_file = state_file
+        self.order_executor = order_executor
         self._running = False
         self._thread: Optional[threading.Thread] = None
 
@@ -114,7 +117,31 @@ class MonitorLoop:
 
         indicators = calculate_indicators(df, config)
         state = self.states[symbol]
+
+        # IN_TRADE: skip scan/advance, just check whether position is still open
+        if state.phase == Phase.IN_TRADE:
+            if self.order_executor is not None:
+                self.order_executor.check_in_trade(symbol, state)
+                if state.phase == Phase.IN_TRADE:  # still open after check
+                    self.order_executor.update_trailing_stop(symbol, state, indicators)
+            self.update_queue.put({
+                "symbol": symbol,
+                "phase": state.phase.value,
+                "direction": state.direction,
+                "pullback_count": state.pullback_count,
+                "window_open": state.window_open,
+                "atr": indicators["atr"],
+                "trend": indicators["trend"],
+                "timestamp": datetime.now(tz=timezone.utc).isoformat(),
+            })
+            return
+
+        # Normal scan flow: advance state machine then attempt entry
         self.states[symbol] = advance_state(state, df, indicators, config, bar_index=-2)
+
+        # execute() resets state to SCANNING on completion; update_queue reflects post-execution state
+        if self.order_executor is not None:
+            self.order_executor.execute(symbol, self.states[symbol], indicators)
 
         self.update_queue.put({
             "symbol": symbol,
