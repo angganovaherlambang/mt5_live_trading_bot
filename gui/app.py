@@ -25,6 +25,7 @@ from mt5.connection import MT5Connection
 from monitor.loop import MonitorLoop
 from monitor.trader import OrderExecutor
 from notify.telegram import TelegramNotifier
+from notify.telegram_listener import TelegramListener
 from gui.panels import PanelsMixin
 from gui.tabs import TabsMixin
 from gui.updates import UpdatesMixin
@@ -41,6 +42,16 @@ def _build_notifier() -> Optional[TelegramNotifier]:
     chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
     if token and chat_id:
         return TelegramNotifier(token=token, chat_id=chat_id)
+    return None
+
+
+def _build_listener(
+    notifier: Optional[TelegramNotifier], get_status_fn
+) -> Optional[TelegramListener]:
+    token = os.getenv("TELEGRAM_BOT_TOKEN", "")
+    chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
+    if notifier and token and chat_id:
+        return TelegramListener(token=token, chat_id=chat_id, get_status=get_status_fn)
     return None
 
 
@@ -65,6 +76,7 @@ class AdvancedMT5TradingMonitorGUI(PanelsMixin, TabsMixin, UpdatesMixin):
         self.connection = MT5Connection()
         self.configs = load_all_configs(STRATEGIES_DIR, SYMBOLS)
         self.notifier: Optional[TelegramNotifier] = _build_notifier()
+        self.listener: Optional[TelegramListener] = None
         self.monitor_loop: MonitorLoop | None = None
         self.order_executor: OrderExecutor | None = None
 
@@ -106,6 +118,7 @@ class AdvancedMT5TradingMonitorGUI(PanelsMixin, TabsMixin, UpdatesMixin):
                 notifier=self.notifier,
             )
             self.monitor_loop.start()
+            self._start_listener()
             self._refresh_mode_label()
             tg = " + Telegram" if self.notifier else ""
             self.terminal_log(f"OrderExecutor started — DEMO mode{tg}", "INFO")
@@ -129,6 +142,24 @@ class AdvancedMT5TradingMonitorGUI(PanelsMixin, TabsMixin, UpdatesMixin):
             self.order_executor.demo_mode = True
             self.terminal_log("Switched to DEMO mode — orders will only be logged", "INFO")
         self._refresh_mode_label()
+
+    def _start_listener(self) -> None:
+        if self.monitor_loop is None:
+            return
+        self.listener = _build_listener(
+            self.notifier,
+            lambda: {
+                sym: {
+                    "phase": state.phase.value,
+                    "direction": state.direction,
+                    "ticket": state.active_ticket,
+                }
+                for sym, state in self.monitor_loop.states.items()
+            },
+        )
+        if self.listener:
+            self.listener.start()
+            self.terminal_log("Telegram listener started — send /status to query bot", "INFO")
 
     def _refresh_mode_label(self) -> None:
         if self.order_executor is None:

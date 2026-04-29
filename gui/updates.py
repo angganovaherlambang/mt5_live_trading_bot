@@ -54,7 +54,9 @@ class UpdatesMixin:
         self.root.after(1000, self.update_time)
 
     def on_closing(self):
-        """Clean shutdown: stop the monitor loop, save state, destroy window."""
+        """Clean shutdown: stop the monitor loop, listener, save state, destroy window."""
+        if hasattr(self, "listener") and self.listener:
+            self.listener.stop()
         if hasattr(self, "monitor_loop") and self.monitor_loop:
             self.monitor_loop.stop()
         self.root.destroy()
