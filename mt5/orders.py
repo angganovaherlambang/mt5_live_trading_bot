@@ -298,6 +298,33 @@ def get_current_price(symbol: str, direction: str) -> Optional[float]:
     return tick.ask if direction == "LONG" else tick.bid
 
 
+def get_all_open_positions() -> list[dict]:
+    """
+    Return all open positions across every symbol.
+
+    Like get_open_positions() but with no symbol filter, and includes
+    the unrealized `profit` field needed for /positions reply.
+    """
+    if mt5 is None:
+        return []
+    positions = mt5.positions_get()
+    if not positions:
+        return []
+    return [
+        {
+            "ticket": p.ticket,
+            "symbol": p.symbol,
+            "type": "BUY" if p.type == 0 else "SELL",
+            "volume": p.volume,
+            "price_open": p.price_open,
+            "sl": p.sl,
+            "tp": p.tp,
+            "profit": p.profit,
+        }
+        for p in positions
+    ]
+
+
 def get_daily_deals(from_datetime: datetime) -> list[dict]:
     """
     Return closed deals (DEAL_ENTRY_OUT) since from_datetime.
