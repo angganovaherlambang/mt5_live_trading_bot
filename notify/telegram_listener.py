@@ -32,6 +32,13 @@ _PHASE_ICONS = {
     "IN_TRADE": "🔴",
 }
 
+_DISPATCH = {
+    "/status": "_reply_status",
+    "/positions": "_reply_positions",
+    "/balance": "_reply_balance",
+    "/help": "_reply_help",
+}
+
 _HELP_TEXT = (
     "📖 Available commands:\n"
     "/status    — phase of all 8 symbols\n"
@@ -124,15 +131,9 @@ class TelegramListener:
         chat_id = str((msg.get("chat") or {}).get("id", ""))
         if chat_id != self._chat_id:
             return
-        _DISPATCH = {
-            "/status": self._reply_status,
-            "/positions": self._reply_positions,
-            "/balance": self._reply_balance,
-            "/help": self._reply_help,
-        }
-        handler = _DISPATCH.get(text)
-        if handler:
-            handler()
+        method_name = _DISPATCH.get(text)
+        if method_name:
+            getattr(self, method_name)()
 
     def _reply_status(self) -> None:
         status = self._get_status()
@@ -152,12 +153,11 @@ class TelegramListener:
             return
         lines = [f"📂 Open positions ({len(positions)})"]
         for p in positions:
+            icon = "🟢" if p["type"] == "BUY" else "🔴"
             sign = "+" if p.get("profit", 0) >= 0 else ""
             lines.append(
-                f"{'🟢' if p['type'] == 'BUY' else '🔴'} {p['symbol']} "
-                f"{p['type']} {p['volume']}lot | "
-                f"P&L: {sign}{p.get('profit', 0):.2f} | "
-                f"#{p['ticket']}"
+                f"{icon} {p['symbol']} {p['type']} {p['volume']}lot | "
+                f"P&L: {sign}{p.get('profit', 0):.2f} | #{p['ticket']}"
             )
         self._send("\n".join(lines))
 

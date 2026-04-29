@@ -109,7 +109,7 @@ class MonitorLoop:
             if not self._running:
                 break
             try:
-                if self._process_symbol(symbol):
+                if self._process_symbol(symbol, now):
                     success_count += 1
             except Exception as exc:
                 logger.exception("Error processing %s: %s", symbol, exc)
@@ -175,11 +175,12 @@ class MonitorLoop:
             total_profit=total_profit,
         )
 
-    def _process_symbol(self, symbol: str) -> bool:
+    def _process_symbol(self, symbol: str, now: Optional[datetime] = None) -> bool:
         """
         Process one symbol for the current candle.
         Returns True if data was fetched and processed, False on skip.
         """
+        _now = now or datetime.now(tz=timezone.utc)
         config = self.configs.get(symbol)
         if not config:
             return False
@@ -206,7 +207,7 @@ class MonitorLoop:
                 "window_open": state.window_open,
                 "atr": indicators["atr"],
                 "trend": indicators["trend"],
-                "timestamp": datetime.now(tz=timezone.utc).isoformat(),
+                "timestamp": _now.isoformat(),
             })
             return True
 

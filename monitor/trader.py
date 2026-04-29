@@ -72,8 +72,6 @@ class OrderExecutor:
         if ticket:
             state.phase = Phase.IN_TRADE
             state.active_ticket = ticket
-            if self.notifier:
-                self._notify_order_placed(symbol, state.direction, indicators, ticket)
         else:
             state.reset()
 
@@ -133,38 +131,19 @@ class OrderExecutor:
 
         if direction == "LONG":
             candidate_sl = current_price - atr * sl_mult
-            if candidate_sl > current_sl:
-                logger.info(
-                    "%s: trailing stop LONG SL %.5f → %.5f",
-                    symbol, current_sl, candidate_sl,
-                )
-                set_position_sltp(state.active_ticket, symbol, candidate_sl, current_tp)
-                if self.notifier:
-                    self.notifier.notify_sl_moved(symbol, direction, current_sl, candidate_sl)
-        else:  # SHORT
+            should_move = candidate_sl > current_sl
+        else:
             candidate_sl = current_price + atr * sl_mult
-            if candidate_sl < current_sl:
-                logger.info(
-                    "%s: trailing stop SHORT SL %.5f → %.5f",
-                    symbol, current_sl, candidate_sl,
-                )
-                set_position_sltp(state.active_ticket, symbol, candidate_sl, current_tp)
-                if self.notifier:
-                    self.notifier.notify_sl_moved(symbol, direction, current_sl, candidate_sl)
+            should_move = candidate_sl < current_sl
 
-    def _notify_order_placed(
-        self, symbol: str, direction: str, indicators: dict, ticket: int
-    ) -> None:
-        config = self.configs.get(symbol, {})
-        atr = indicators.get("atr", 0.0)
-        sl_mult = float(config.get(f"{direction.lower()}_atr_sl_multiplier", 1.5))
-        tp_mult = float(config.get(f"{direction.lower()}_atr_tp_multiplier", 10.0))
-        entry = get_current_price(symbol, direction) or 0.0
-        sl = entry - atr * sl_mult if direction == "LONG" else entry + atr * sl_mult
-        tp = entry + atr * tp_mult if direction == "LONG" else entry - atr * tp_mult
-        balance = (self.connection.get_account_info() or {}).get("balance", 0.0)
-        lot = round(balance * self.risk_pct / max(atr * sl_mult, 1e-10), 2)
-        self.notifier.notify_order_placed(symbol, direction, lot, entry, sl, tp, ticket)
+        if should_move:
+            logger.info(
+                "%s: trailing stop %s SL %.5f → %.5f",
+                symbol, direction, current_sl, candidate_sl,
+            )
+            set_position_sltp(state.active_ticket, symbol, candidate_sl, current_tp)
+            if self.notifier:
+                self.notifier.notify_sl_moved(symbol, direction, current_sl, candidate_sl)
 
     def _attempt_order(self, symbol: str, state: PhaseState, indicators: dict) -> Optional[int]:
         """
@@ -267,6 +246,10 @@ class OrderExecutor:
                 "%s: order placed ticket=%d direction=%s lot=%.2f sl=%.5f tp=%.5f",
                 symbol, ticket, direction, lot, sl_price, tp_price,
             )
+            if self.notifier:
+                self.notifier.notify_order_placed(
+                    symbol, direction, lot, entry_price, sl_price, tp_price, ticket
+                )
         else:
             logger.error("%s: order placement failed", symbol)
         return ticket

@@ -37,10 +37,12 @@ RISK_PCT = 0.01
 MAX_LOT = 0.5
 
 
+def _telegram_credentials() -> tuple[str, str]:
+    return os.getenv("TELEGRAM_BOT_TOKEN", ""), os.getenv("TELEGRAM_CHAT_ID", "")
+
+
 def _build_notifier() -> Optional[TelegramNotifier]:
-    """Read TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID from env. Returns None if not set."""
-    token = os.getenv("TELEGRAM_BOT_TOKEN", "")
-    chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
+    token, chat_id = _telegram_credentials()
     if token and chat_id:
         return TelegramNotifier(token=token, chat_id=chat_id)
     return None
@@ -52,8 +54,7 @@ def _build_listener(
     get_positions=None,
     get_balance=None,
 ) -> Optional[TelegramListener]:
-    token = os.getenv("TELEGRAM_BOT_TOKEN", "")
-    chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
+    token, chat_id = _telegram_credentials()
     if notifier and token and chat_id:
         return TelegramListener(
             token=token,
