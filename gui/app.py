@@ -26,6 +26,7 @@ from monitor.loop import MonitorLoop
 from monitor.trader import OrderExecutor
 from notify.telegram import TelegramNotifier
 from notify.telegram_listener import TelegramListener
+from mt5.orders import get_all_open_positions
 from gui.panels import PanelsMixin
 from gui.tabs import TabsMixin
 from gui.updates import UpdatesMixin
@@ -46,12 +47,21 @@ def _build_notifier() -> Optional[TelegramNotifier]:
 
 
 def _build_listener(
-    notifier: Optional[TelegramNotifier], get_status_fn
+    notifier: Optional[TelegramNotifier],
+    get_status,
+    get_positions=None,
+    get_balance=None,
 ) -> Optional[TelegramListener]:
     token = os.getenv("TELEGRAM_BOT_TOKEN", "")
     chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
     if notifier and token and chat_id:
-        return TelegramListener(token=token, chat_id=chat_id, get_status=get_status_fn)
+        return TelegramListener(
+            token=token,
+            chat_id=chat_id,
+            get_status=get_status,
+            get_positions=get_positions,
+            get_balance=get_balance,
+        )
     return None
 
 
@@ -148,7 +158,7 @@ class AdvancedMT5TradingMonitorGUI(PanelsMixin, TabsMixin, UpdatesMixin):
             return
         self.listener = _build_listener(
             self.notifier,
-            lambda: {
+            get_status=lambda: {
                 sym: {
                     "phase": state.phase.value,
                     "direction": state.direction,
@@ -156,6 +166,8 @@ class AdvancedMT5TradingMonitorGUI(PanelsMixin, TabsMixin, UpdatesMixin):
                 }
                 for sym, state in self.monitor_loop.states.items()
             },
+            get_positions=get_all_open_positions,
+            get_balance=self.connection.get_account_info,
         )
         if self.listener:
             self.listener.start()
