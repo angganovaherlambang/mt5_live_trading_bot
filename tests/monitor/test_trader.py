@@ -426,3 +426,90 @@ class TestUpdateTrailingStop:
              patch("monitor.trader.set_position_sltp") as mock_sltp:
             executor.update_trailing_stop("EURUSD", state, {"atr": 0.001})
         mock_sltp.assert_not_called()
+
+
+class TestNotifierIntegration:
+    """OrderExecutor calls notifier on key events when provided."""
+
+    def _make_executor(self, mock_connection, eurusd_config, notifier=None):
+        return OrderExecutor(
+            connection=mock_connection,
+            configs={"EURUSD": eurusd_config},
+            risk_pct=0.01,
+            max_lot=0.5,
+            demo_mode=False,
+            notifier=notifier,
+        )
+
+    def test_notifier_called_on_successful_order(self, mock_connection, eurusd_config, sym_info_dict):
+        notifier = MagicMock()
+        executor = self._make_executor(mock_connection, eurusd_config, notifier)
+        state = PhaseState(symbol="EURUSD", phase=Phase.AWAITING_ENTRY, direction="LONG")
+
+        with patch("monitor.trader.get_open_positions", return_value=[]), \
+             patch("monitor.trader.get_symbol_info", return_value=sym_info_dict), \
+             patch("monitor.trader.get_current_price", return_value=1.1025), \
+             patch("monitor.trader.place_market_order", return_value=55555):
+            executor.execute("EURUSD", state, {"atr": 0.0010})
+
+        notifier.notify_order_placed.assert_called_once()
+        call_kwargs = notifier.notify_order_placed.call_args
+        assert call_kwargs[0][0] == "EURUSD"
+        assert call_kwargs[0][1] == "LONG"
+        assert call_kwargs[0][6] == 55555  # ticket
+
+    def test_no_notification_on_failed_order(self, mock_connection, eurusd_config, sym_info_dict):
+        notifier = MagicMock()
+        executor = self._make_executor(mock_connection, eurusd_config, notifier)
+        state = PhaseState(symbol="EURUSD", phase=Phase.AWAITING_ENTRY, direction="LONG")
+
+        with patch("monitor.trader.get_open_positions", return_value=[]), \
+             patch("monitor.trader.get_symbol_info", return_value=sym_info_dict), \
+             patch("monitor.trader.get_current_price", return_value=1.1025), \
+             patch("monitor.trader.place_market_order", return_value=None):
+            executor.execute("EURUSD", state, {"atr": 0.0010})
+
+        notifier.notify_order_placed.assert_not_called()
+
+    def test_notifier_called_on_position_closed(self, mock_connection, eurusd_config):
+        notifier = MagicMock()
+        executor = self._make_executor(mock_connection, eurusd_config, notifier)
+        state = PhaseState(symbol="EURUSD", phase=Phase.IN_TRADE, direction="LONG")
+        state.active_ticket = 12345
+
+        with patch("monitor.trader.get_open_positions", return_value=[]):
+            executor.check_in_trade("EURUSD", state)
+
+        notifier.notify_position_closed.assert_called_once_with("EURUSD", "LONG", 12345)
+
+    def test_notifier_called_on_sl_moved(self, mock_connection, eurusd_config):
+        notifier = MagicMock()
+        executor = self._make_executor(mock_connection, eurusd_config, notifier)
+        state = PhaseState(symbol="EURUSD", phase=Phase.IN_TRADE, direction="LONG")
+        state.active_ticket = 111
+        indicators = {"atr": 0.0010}
+        open_pos = [{"ticket": 111, "symbol": "EURUSD", "type": "BUY",
+                     "volume": 0.01, "price_open": 1.1000, "sl": 1.0900, "tp": 1.1200}]
+
+        with patch("monitor.trader.get_open_positions", return_value=open_pos), \
+             patch("monitor.trader.get_current_price", return_value=1.1050), \
+             patch("monitor.trader.set_position_sltp", return_value=True):
+            executor.update_trailing_stop("EURUSD", state, indicators)
+
+        notifier.notify_sl_moved.assert_called_once()
+        args = notifier.notify_sl_moved.call_args[0]
+        assert args[0] == "EURUSD"
+        assert args[1] == "LONG"
+
+    def test_works_fine_without_notifier(self, mock_connection, eurusd_config, sym_info_dict):
+        """notifier=None should not cause any error."""
+        executor = self._make_executor(mock_connection, eurusd_config, notifier=None)
+        state = PhaseState(symbol="EURUSD", phase=Phase.AWAITING_ENTRY, direction="LONG")
+
+        with patch("monitor.trader.get_open_positions", return_value=[]), \
+             patch("monitor.trader.get_symbol_info", return_value=sym_info_dict), \
+             patch("monitor.trader.get_current_price", return_value=1.1025), \
+             patch("monitor.trader.place_market_order", return_value=99999):
+            executor.execute("EURUSD", state, {"atr": 0.0010})
+
+        assert state.phase == Phase.IN_TRADE  # succeeded without notifier

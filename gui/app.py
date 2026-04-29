@@ -6,16 +6,19 @@ Layout and update logic live in PanelsMixin, TabsMixin, UpdatesMixin.
 Trading logic lives in core/ and monitor/.
 """
 from __future__ import annotations
+import os
 import queue
 import tkinter as tk
 from tkinter import ttk
 from pathlib import Path
+from typing import Optional
 
 from core.config_loader import load_all_configs
 from core.persistence import load_states
 from mt5.connection import MT5Connection
 from monitor.loop import MonitorLoop
 from monitor.trader import OrderExecutor
+from notify.telegram import TelegramNotifier
 from gui.panels import PanelsMixin
 from gui.tabs import TabsMixin
 from gui.updates import UpdatesMixin
@@ -24,6 +27,15 @@ SYMBOLS = ["EURUSD", "GBPUSD", "XAUUSD", "AUDUSD", "XAGUSD", "USDCHF", "EURJPY",
 STRATEGIES_DIR = Path("strategies")
 RISK_PCT = 0.01
 MAX_LOT = 0.5
+
+
+def _build_notifier() -> Optional[TelegramNotifier]:
+    """Read TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID from env. Returns None if not set."""
+    token = os.getenv("TELEGRAM_BOT_TOKEN", "")
+    chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
+    if token and chat_id:
+        return TelegramNotifier(token=token, chat_id=chat_id)
+    return None
 
 
 class AdvancedMT5TradingMonitorGUI(PanelsMixin, TabsMixin, UpdatesMixin):
@@ -46,6 +58,7 @@ class AdvancedMT5TradingMonitorGUI(PanelsMixin, TabsMixin, UpdatesMixin):
         self.update_queue: queue.Queue = queue.Queue()
         self.connection = MT5Connection()
         self.configs = load_all_configs(STRATEGIES_DIR, SYMBOLS)
+        self.notifier: Optional[TelegramNotifier] = _build_notifier()
         self.monitor_loop: MonitorLoop | None = None
         self.order_executor: OrderExecutor | None = None
 
@@ -76,6 +89,7 @@ class AdvancedMT5TradingMonitorGUI(PanelsMixin, TabsMixin, UpdatesMixin):
                 risk_pct=RISK_PCT,
                 max_lot=MAX_LOT,
                 demo_mode=True,
+                notifier=self.notifier,
             )
             self.monitor_loop = MonitorLoop(
                 connection=self.connection,
@@ -83,10 +97,12 @@ class AdvancedMT5TradingMonitorGUI(PanelsMixin, TabsMixin, UpdatesMixin):
                 symbols=SYMBOLS,
                 update_queue=self.update_queue,
                 order_executor=self.order_executor,
+                notifier=self.notifier,
             )
             self.monitor_loop.start()
             self._refresh_mode_label()
-            self.terminal_log("OrderExecutor started — DEMO mode", "INFO")
+            tg = " + Telegram" if self.notifier else ""
+            self.terminal_log(f"OrderExecutor started — DEMO mode{tg}", "INFO")
         else:
             self.status_label.configure(text="Disconnected — check MT5")
             self.terminal_log("MT5 connection failed", "ERROR")

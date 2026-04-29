@@ -54,6 +54,7 @@ class MonitorLoop:
         update_queue: queue.Queue,
         state_file: Path = STATE_FILE,
         order_executor=None,
+        notifier=None,
     ) -> None:
         self.connection = connection
         self.configs = configs
@@ -61,6 +62,7 @@ class MonitorLoop:
         self.update_queue = update_queue
         self.state_file = state_file
         self.order_executor = order_executor
+        self.notifier = notifier
         self._running = False
         self._thread: Optional[threading.Thread] = None
 
@@ -103,6 +105,8 @@ class MonitorLoop:
                 self._process_symbol(symbol)
             except Exception as exc:
                 logger.exception("Error processing %s: %s", symbol, exc)
+                if self.notifier:
+                    self.notifier.notify_error(symbol, str(exc))
         save_states(self.states, self.state_file)
 
     def _process_symbol(self, symbol: str) -> None:

@@ -40,6 +40,7 @@ class OrderExecutor:
     risk_pct   : fraction of balance to risk per trade (e.g. 0.01 = 1%)
     max_lot    : hard cap on lot size (safety limit)
     demo_mode  : if True, logs what it would do but never calls place_market_order
+    notifier   : optional TelegramNotifier — sends alerts on trade events
     """
 
     def __init__(
@@ -49,12 +50,14 @@ class OrderExecutor:
         risk_pct: float = 0.01,
         max_lot: float = 0.5,
         demo_mode: bool = True,
+        notifier=None,
     ) -> None:
         self.connection = connection
         self.configs = configs
         self.risk_pct = risk_pct
         self.max_lot = max_lot
         self.demo_mode = demo_mode
+        self.notifier = notifier
 
     def execute(self, symbol: str, state: PhaseState, indicators: dict) -> None:
         """
@@ -69,6 +72,8 @@ class OrderExecutor:
         if ticket:
             state.phase = Phase.IN_TRADE
             state.active_ticket = ticket
+            if self.notifier:
+                self._notify_order_placed(symbol, state.direction, indicators, ticket)
         else:
             state.reset()
 
@@ -86,6 +91,8 @@ class OrderExecutor:
                 "%s: position %d closed (SL/TP or manual), resetting to SCANNING",
                 symbol, state.active_ticket,
             )
+            if self.notifier:
+                self.notifier.notify_position_closed(symbol, state.direction, state.active_ticket)
             state.reset()
 
     def update_trailing_stop(self, symbol: str, state: PhaseState, indicators: dict) -> None:
@@ -132,6 +139,8 @@ class OrderExecutor:
                     symbol, current_sl, candidate_sl,
                 )
                 set_position_sltp(state.active_ticket, symbol, candidate_sl, current_tp)
+                if self.notifier:
+                    self.notifier.notify_sl_moved(symbol, direction, current_sl, candidate_sl)
         else:  # SHORT
             candidate_sl = current_price + atr * sl_mult
             if candidate_sl < current_sl:
@@ -140,6 +149,22 @@ class OrderExecutor:
                     symbol, current_sl, candidate_sl,
                 )
                 set_position_sltp(state.active_ticket, symbol, candidate_sl, current_tp)
+                if self.notifier:
+                    self.notifier.notify_sl_moved(symbol, direction, current_sl, candidate_sl)
+
+    def _notify_order_placed(
+        self, symbol: str, direction: str, indicators: dict, ticket: int
+    ) -> None:
+        config = self.configs.get(symbol, {})
+        atr = indicators.get("atr", 0.0)
+        sl_mult = float(config.get(f"{direction.lower()}_atr_sl_multiplier", 1.5))
+        tp_mult = float(config.get(f"{direction.lower()}_atr_tp_multiplier", 10.0))
+        entry = get_current_price(symbol, direction) or 0.0
+        sl = entry - atr * sl_mult if direction == "LONG" else entry + atr * sl_mult
+        tp = entry + atr * tp_mult if direction == "LONG" else entry - atr * tp_mult
+        balance = (self.connection.get_account_info() or {}).get("balance", 0.0)
+        lot = round(balance * self.risk_pct / max(atr * sl_mult, 1e-10), 2)
+        self.notifier.notify_order_placed(symbol, direction, lot, entry, sl, tp, ticket)
 
     def _attempt_order(self, symbol: str, state: PhaseState, indicators: dict) -> Optional[int]:
         """
