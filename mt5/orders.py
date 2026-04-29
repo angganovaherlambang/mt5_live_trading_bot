@@ -6,6 +6,7 @@ in the codebase should import MetaTrader5 directly for order placement.
 """
 from __future__ import annotations
 import logging
+from datetime import datetime, timezone, timedelta
 from typing import Optional
 
 try:
@@ -295,3 +296,31 @@ def get_current_price(symbol: str, direction: str) -> Optional[float]:
         return None
 
     return tick.ask if direction == "LONG" else tick.bid
+
+
+def get_daily_deals(from_datetime: datetime) -> list[dict]:
+    """
+    Return closed deals (DEAL_ENTRY_OUT) since from_datetime.
+
+    Each dict: ticket, symbol, type ("BUY"/"SELL"), profit, volume.
+    Returns [] if MT5 unavailable or no deals found.
+    """
+    if mt5 is None:
+        return []
+
+    to_datetime = datetime.now(tz=timezone.utc) + timedelta(hours=1)
+    deals = mt5.history_deals_get(from_datetime, to_datetime)
+    if not deals:
+        return []
+
+    return [
+        {
+            "ticket": d.ticket,
+            "symbol": d.symbol,
+            "type": "BUY" if d.type == 0 else "SELL",
+            "profit": d.profit,
+            "volume": d.volume,
+        }
+        for d in deals
+        if d.entry == 1  # DEAL_ENTRY_OUT — closing transaction only
+    ]

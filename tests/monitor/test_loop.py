@@ -2,6 +2,7 @@ import queue
 import pytest
 import numpy as np
 import pandas as pd
+from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 from monitor.loop import MonitorLoop
 from core.state import PhaseState, Phase
@@ -212,3 +213,56 @@ class TestMonitorLoop:
         loop._process_symbol("EURUSD")
 
         mock_executor.update_trailing_stop.assert_not_called()
+
+
+class TestDailySummary:
+    def _make_loop(self, mock_connection, eurusd_config, notifier=None):
+        loop = MonitorLoop(
+            connection=mock_connection,
+            configs={"EURUSD": eurusd_config},
+            symbols=["EURUSD"],
+            update_queue=queue.Queue(),
+            notifier=notifier,
+        )
+        return loop
+
+    def test_sends_summary_at_2355(self, mock_connection, eurusd_config):
+        """Daily summary fires at 23:55 UTC."""
+        mock_notifier = MagicMock()
+        loop = self._make_loop(mock_connection, eurusd_config, notifier=mock_notifier)
+        target_time = datetime(2026, 4, 30, 23, 55, 0, tzinfo=timezone.utc)
+        with patch("monitor.loop.get_daily_deals", return_value=[
+            {"profit": 50.0}, {"profit": -10.0}
+        ]):
+            loop._check_daily_summary(target_time)
+        mock_notifier.notify_daily_summary.assert_called_once_with(
+            date_str="2026-04-30",
+            trades_closed=2,
+            total_profit=40.0,
+        )
+
+    def test_does_not_send_outside_summary_window(self, mock_connection, eurusd_config):
+        """Summary is NOT sent at any other time."""
+        mock_notifier = MagicMock()
+        loop = self._make_loop(mock_connection, eurusd_config, notifier=mock_notifier)
+        for hour, minute in [(23, 54), (23, 56), (12, 0), (0, 0)]:
+            t = datetime(2026, 4, 30, hour, minute, 0, tzinfo=timezone.utc)
+            loop._check_daily_summary(t)
+        mock_notifier.notify_daily_summary.assert_not_called()
+
+    def test_does_not_send_twice_same_day(self, mock_connection, eurusd_config):
+        """Second call at 23:55 on the same day is a no-op."""
+        mock_notifier = MagicMock()
+        loop = self._make_loop(mock_connection, eurusd_config, notifier=mock_notifier)
+        target_time = datetime(2026, 4, 30, 23, 55, 0, tzinfo=timezone.utc)
+        with patch("monitor.loop.get_daily_deals", return_value=[]):
+            loop._check_daily_summary(target_time)
+            loop._check_daily_summary(target_time)
+        assert mock_notifier.notify_daily_summary.call_count == 1
+
+    def test_skips_when_no_notifier(self, mock_connection, eurusd_config):
+        """No crash and no call when notifier is None."""
+        loop = self._make_loop(mock_connection, eurusd_config, notifier=None)
+        target_time = datetime(2026, 4, 30, 23, 55, 0, tzinfo=timezone.utc)
+        with patch("monitor.loop.get_daily_deals", return_value=[]):
+            loop._check_daily_summary(target_time)  # must not raise

@@ -21,6 +21,7 @@ from core.indicators import calculate_indicators
 from core.state import PhaseState, Phase
 from core.state_machine import advance_state
 from core.persistence import save_states, load_states
+from mt5.orders import get_daily_deals
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +72,7 @@ class MonitorLoop:
         self.states: dict[str, PhaseState] = {
             sym: loaded.get(sym, PhaseState(symbol=sym)) for sym in symbols
         }
+        self._last_summary_date = None
 
     def start(self) -> None:
         self._running = True
@@ -98,6 +100,7 @@ class MonitorLoop:
 
     def _tick(self) -> None:
         """Process all symbols on a candle close."""
+        now = datetime.now(tz=timezone.utc)
         for symbol in self.symbols:
             if not self._running:
                 break
@@ -108,6 +111,26 @@ class MonitorLoop:
                 if self.notifier:
                     self.notifier.notify_error(symbol, str(exc))
         save_states(self.states, self.state_file)
+        self._check_daily_summary(now)
+
+    def _check_daily_summary(self, now: datetime) -> None:
+        """Send daily P&L summary at 23:55 UTC, once per day."""
+        if now.hour != 23 or now.minute != 55:
+            return
+        today = now.date()
+        if self._last_summary_date == today:
+            return
+        self._last_summary_date = today
+        if self.notifier is None:
+            return
+        start_of_day = datetime(today.year, today.month, today.day, tzinfo=timezone.utc)
+        deals = get_daily_deals(start_of_day)
+        total_profit = sum(d["profit"] for d in deals)
+        self.notifier.notify_daily_summary(
+            date_str=today.strftime("%Y-%m-%d"),
+            trades_closed=len(deals),
+            total_profit=total_profit,
+        )
 
     def _process_symbol(self, symbol: str) -> None:
         config = self.configs.get(symbol)

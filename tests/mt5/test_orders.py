@@ -1,7 +1,7 @@
 import pytest
 from unittest.mock import MagicMock
 
-from mt5.orders import place_market_order, get_open_positions, close_position, get_symbol_info, get_current_price, set_position_sltp
+from mt5.orders import place_market_order, get_open_positions, close_position, get_symbol_info, get_current_price, set_position_sltp, get_daily_deals
 
 
 @pytest.fixture
@@ -285,3 +285,50 @@ class TestPlaceMarketOrderPostFillSltp:
         mock_mt5.order_send.side_effect = [success, failure]
         result = place_market_order("EURUSD", "LONG", 0.01, 1.09, 1.11, 10)
         assert result == 111222
+
+
+class TestGetDailyDeals:
+    def test_returns_closed_deals(self, mock_mt5):
+        """Returns OUT deals (closing transactions) with profit."""
+        deal = MagicMock()
+        deal.ticket = 77
+        deal.symbol = "EURUSD"
+        deal.type = 0   # BUY close
+        deal.entry = 1  # DEAL_ENTRY_OUT
+        deal.profit = 45.50
+        deal.volume = 0.01
+        mock_mt5.history_deals_get.return_value = [deal]
+
+        from datetime import datetime, timezone
+        results = get_daily_deals(datetime(2026, 4, 30, tzinfo=timezone.utc))
+
+        assert len(results) == 1
+        assert results[0]["ticket"] == 77
+        assert results[0]["profit"] == 45.50
+        assert results[0]["type"] == "BUY"
+
+    def test_excludes_entry_deals(self, mock_mt5):
+        """Entry deals (DEAL_ENTRY_IN=0) are not returned."""
+        deal = MagicMock()
+        deal.ticket = 88
+        deal.symbol = "EURUSD"
+        deal.type = 0
+        deal.entry = 0  # DEAL_ENTRY_IN — opening deal
+        deal.profit = 0.0
+        deal.volume = 0.01
+        mock_mt5.history_deals_get.return_value = [deal]
+
+        from datetime import datetime, timezone
+        results = get_daily_deals(datetime(2026, 4, 30, tzinfo=timezone.utc))
+
+        assert results == []
+
+    def test_returns_empty_when_no_deals(self, mock_mt5):
+        mock_mt5.history_deals_get.return_value = []
+        from datetime import datetime, timezone
+        assert get_daily_deals(datetime(2026, 4, 30, tzinfo=timezone.utc)) == []
+
+    def test_returns_empty_when_mt5_none(self, mocker):
+        mocker.patch("mt5.orders.mt5", None)
+        from datetime import datetime, timezone
+        assert get_daily_deals(datetime(2026, 4, 30, tzinfo=timezone.utc)) == []

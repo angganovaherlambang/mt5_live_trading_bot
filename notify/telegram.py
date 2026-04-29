@@ -73,3 +73,16 @@ class TelegramNotifier:
     def notify_error(self, context: Optional[str], message: str) -> None:
         prefix = f"[{context}] " if context else ""
         self.send(f"⚠️ ERROR {prefix}{message}")
+
+    def notify_daily_summary(
+        self,
+        date_str: str,
+        trades_closed: int,
+        total_profit: float,
+    ) -> None:
+        sign = "+" if total_profit >= 0 else ""
+        self.send(
+            f"📅 Daily Summary — {date_str}\n"
+            f"Trades closed: {trades_closed}\n"
+            f"P&L: {sign}{total_profit:.2f}"
+        )
